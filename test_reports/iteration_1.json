@@ -1,0 +1,59 @@
+{
+  "summary": "Both backend and frontend tested on first iteration. Backend: 28/28 pytest cases pass (100%) covering auth (register/login/me, 401/409), parties (list w/ super-host-first, address gated, attendees gated for super, create+persist, join role, free-join 402 limit, X-Store-Tier elevation, leave), discover/swipe/match (demo auto-match verified), chats (list, send+read, 403 for strangers, party-chat access requires attendance), profile+boost (402 free, 200 w/ X-Store-Tier premium), payments (Stripe checkout URL returned for premium+super at correct £ amounts, invalid plan 422, status endpoint). Frontend mobile UI verified via Playwright at 390x844: login→feed with city chips→party card→role select→join→open party chat→send message→swipe tab→like→premium screen all working with correct testIDs. Minor UX inconsistency on premium screen (see action items). No deprecated expo-* packages detected (no expo-av, expo-barcode-scanner, expo-background-fetch).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "premium.tsx plan cards",
+        "issue": "Plan cards display RevenueCat test-store prices ($9.99/mo for Premium, $7.99/mo for Super) while the Stripe pay button correctly shows £3.99 / £7.99. Result: Premium card looks MORE expensive than Super Premium (9.99 > 7.99), which is backwards and confusing. The code at /app/frontend/app/premium.tsx:98-107 uses `rcPrice ?? p.price` — the RC fallback should be removed or the RC product prices in test-store should be configured to match GBP; alternatively always show hardcoded £ price.",
+        "testID": "plan-premium",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "premium",
+        "issues": [
+          "Currency mismatch between plan card ($) and pay-with-card button (£) hurts trust/clarity"
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "global styles",
+        "issue": "Console warning: '\"shadow*\" style props are deprecated. Use \"boxShadow\"'. Likely originates from one of /app/frontend/src/components or shared theme — grep for shadowColor/shadowOffset/shadowRadius and migrate to boxShadow for RN Web."
+      },
+      {
+        "component": "pointerEvents prop",
+        "issue": "Console warning: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Move pointerEvents from JSX prop to style object on affected View/Pressable."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix premium plan card pricing: either remove RC `priceString` fallback and always show £ (hardcoded) OR update RevenueCat test store products to match GBP values 3.99/7.99 — currently Premium looks pricier than Super (9.99 vs 7.99).",
+    "Replace deprecated `shadow*` style props with `boxShadow` for RN Web compatibility (grep shadowColor/shadowOffset).",
+    "Move `pointerEvents` prop to `style.pointerEvents` on affected components."
+  ],
+  "critical_code_review_comments": [
+    "server.py is a single 560-line file — acceptable for MVP but approaches the 700-line threshold; consider splitting routers (auth, parties, swipe, chat, payments) into modules as it grows.",
+    "In server.py `effective_tier`: when `u['tier']` is a paid plan but no `tier_expires`, condition returns 'free' silently; demo users get `tier_expires` 10y out so OK, but add explicit log if a paid tier lacks expiry.",
+    "`list_parties` loads all parties then post-sorts in Python for host-priority; fine at MVP scale but denormalising host.tier onto party docs would allow DB-side sort at scale."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (new regression suite)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "~90%"},
+  "seed_data_creation": "Startup seeds 8 demo users + 6 demo parties + 1 test@afterparty.app (idempotent). Tests also register TEST_* users dynamically; MongoDB entries are left in place for retest reuse (prefix TEST_ for easy cleanup).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend fully green via /app/backend/tests/backend_test.py (28 cases, pytest-xdist loadscope). EXPO_PUBLIC_BACKEND_URL is used (not EXPO_BACKEND_URL). The free-join-limit test registers its own user to avoid interfering with the session fresh_user fixture. Demo auto-match is driven by `target.get('is_demo')` in /swipe. Swipe test iterates discover results to find a demo user because discover ordering (boosted/same-city/verified) can place a non-demo on top when previous test users with those traits exist in Mongo.",
+  "rca_of_issue": "Premium pricing display bug RCA: /app/frontend/app/premium.tsx line 98 does `const rcPrice = (...pkg)?.product.priceString;` then line 107 renders `{rcPrice ?? p.price}`. The RevenueCat test store API returns $9.99 / $7.99 for the sandbox products which overrides the UI's intended £3.99 / £7.99. The Stripe pay button at line 126 uses the local `PLANS` constant directly so it's correct. Fix: either `{p.price}` always, or `{isTestStore ? p.price : (rcPrice ?? p.price)}`."
+}
