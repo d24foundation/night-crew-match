@@ -1,3 +1,5 @@
+import { Platform } from "react-native";
+
 const BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
 
 export const TOKEN_KEY = "afterparty_token";
@@ -47,7 +49,37 @@ export type Party = {
   host_id: string; host: User | null; going_count: number; drinks_count: number; chipin_count: number;
   is_host: boolean; attending: boolean; my_role: string | null; address: string | null;
   can_see_attendees: boolean; attendees: (User & { role: string })[]; attendee_pics: (string | null)[];
+  lat: number | null; lng: number | null; distance_km: number | null; invite_code: string | null;
 };
 
+// Profile photos are stored as "/api/files/<id>" and served by our backend; absolute URLs pass through.
+export const resolveUri = (uri?: string | null) => (!uri ? uri : uri.startsWith("/") ? `${process.env.EXPO_PUBLIC_BACKEND_URL}${uri}` : uri);
+
+export const inviteLink = (code: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL}/invite/${code}`;
+
+export async function uploadPhoto(file: { uri: string; name: string; type: string }): Promise<User> {
+  const form = new FormData();
+  if (Platform.OS === "web") {
+    const blob = await (await fetch(file.uri)).blob();
+    form.append("file", blob, file.name);
+  } else {
+    form.append("file", file as any);
+  }
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const r = await fetch(`${BASE}/me/photo`, { method: "POST", headers, body: form });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new ApiError(r.status, typeof data.detail === "string" ? data.detail : `Upload failed (${r.status})`);
+  }
+  return r.json();
+}
+
+export const fmtDistance = (km: number | null | undefined) => km == null ? null : km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+
 export const CITIES = ["London", "Manchester", "Ibiza", "Berlin", "Paris", "Amsterdam", "New York", "Dubai", "Lagos"];
+export const CITY_COORDS: Record<string, [number, number]> = {
+  London: [51.5074, -0.1278], Manchester: [53.4808, -2.2426], Ibiza: [38.9067, 1.4206], Berlin: [52.52, 13.405], Paris: [48.8566, 2.3522],
+  Amsterdam: [52.3676, 4.9041], "New York": [40.7128, -74.006], Dubai: [25.2048, 55.2708], Lagos: [6.5244, 3.3792],
+};
 export const VIBES = ["House", "Techno", "Afrobeats", "Amapiano", "R&B", "Garage", "Hip-Hop", "Disco", "Chill"];

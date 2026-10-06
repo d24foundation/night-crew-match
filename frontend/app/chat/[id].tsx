@@ -7,11 +7,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { SafetySheet } from "@/src/safety";
 import { Avatar, IconBtn, Ionicons, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Msg = { message_id: string; sender_id: string; sender_name: string; sender_picture?: string | null; text: string; created_at: string };
-type Chat = { chat_id: string; title: string; kind: string; picture?: string | null; messages: Msg[] };
+type Chat = { chat_id: string; title: string; kind: string; picture?: string | null; other_user_id?: string; messages: Msg[] };
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -23,8 +24,15 @@ export default function ChatScreen() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const [text, setText] = useState("");
+  const [safety, setSafety] = useState<{ user_id: string; name: string } | null>(null);
   const list = useRef<FlatList>(null);
   const q = useQuery({ queryKey: ["chat", id], queryFn: () => api<Chat>(`/chats/${id}`), refetchInterval: 3000 });
+
+  const onBlocked = () => {
+    qc.invalidateQueries({ queryKey: ["chats"] });
+    if (q.data?.kind === "match") router.back();
+    else q.refetch();
+  };
 
   const send = async () => {
     const t = text.trim();
@@ -55,8 +63,11 @@ export default function ChatScreen() {
         <Avatar uri={q.data?.picture} name={q.data?.title} size={36} />
         <View style={{ flex: 1 }}>
           <Text style={s.title} numberOfLines={1} testID="chat-title">{q.data?.title ?? "..."}</Text>
-          <Text style={s.sub}>{q.data?.kind === "party" ? "Party group chat" : "Match"}</Text>
+          <Text style={s.sub}>{q.data?.kind === "party" ? "Party group chat · hold a message to report" : "Match"}</Text>
         </View>
+        {q.data?.kind === "match" && q.data.other_user_id && (
+          <IconBtn testID="chat-safety-button" icon="ellipsis-horizontal" onPress={() => setSafety({ user_id: q.data!.other_user_id!, name: q.data!.title })} />
+        )}
       </View>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
         <FlatList
@@ -70,13 +81,14 @@ export default function ChatScreen() {
           renderItem={({ item }) => {
             const mine = item.sender_id === user?.user_id;
             return (
-              <View style={[s.msgRow, mine && { justifyContent: "flex-end" }]}>
+              <Pressable style={[s.msgRow, mine && { justifyContent: "flex-end" }]} disabled={mine} testID={`message-${item.message_id}`}
+                onLongPress={() => setSafety({ user_id: item.sender_id, name: item.sender_name })} delayLongPress={350}>
                 {!mine && <Avatar uri={item.sender_picture} name={item.sender_name} size={28} />}
                 <View style={[s.bubble, mine ? s.mine : s.theirs]}>
                   {!mine && q.data?.kind === "party" && <Text style={s.sender}>{item.sender_name}</Text>}
                   <Text style={[s.msg, mine && { color: colors.onBrandPrimary }]}>{item.text}</Text>
                 </View>
-              </View>
+              </Pressable>
             );
           }}
         />
@@ -92,6 +104,7 @@ export default function ChatScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+      <SafetySheet target={safety} context={id} onClose={() => setSafety(null)} onBlocked={onBlocked} />
     </View>
   );
 }

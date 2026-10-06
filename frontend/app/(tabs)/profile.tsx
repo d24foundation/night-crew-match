@@ -1,11 +1,16 @@
-import { ScrollView, Text, View, Pressable } from "react-native";
+import { useState } from "react";
+import { ActivityIndicator, ScrollView, Text, View, Pressable } from "react-native";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { api, User } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { usesNativeTabs } from "@/src/navigation";
-import { Avatar, Btn, Ionicons, TierBadge } from "@/src/ui";
+import { ChangePhotoBadge, usePhotoPicker } from "@/src/photo";
+import { Sheet } from "@/src/sheet";
+import { Avatar, Btn, Ionicons, TierBadge, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 export default function Profile() {
@@ -13,14 +18,19 @@ export default function Profile() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, logout } = useAuth();
+  const { user, logout, setUser } = useAuth();
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
+  const photo = usePhotoPicker(setUser);
+  const [blocksOpen, setBlocksOpen] = useState(false);
   if (!user) return null;
 
   return (
     <ScrollView style={s.root} contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: bottomChrome + 24, paddingHorizontal: spacing.md, gap: spacing.md }}>
       <View style={s.top}>
-        <Avatar uri={user.picture} name={user.name} size={96} />
+        <Pressable testID="profile-avatar" onPress={photo.open} style={{ alignItems: "center" }}>
+          <Avatar uri={user.picture} name={user.name} size={112} />
+          <ChangePhotoBadge onPress={photo.open} />
+        </Pressable>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Text style={s.name} testID="profile-name">{user.name}{user.age ? `, ${user.age}` : ""}</Text>
           <TierBadge tier={user.tier} testID="profile-tier-badge" />
@@ -45,10 +55,48 @@ export default function Profile() {
       <View style={s.card}>
         <Row icon="mail-outline" label={user.email ?? ""} />
         <Row icon="shield-checkmark-outline" label="Safety: meet in groups, share your location with a friend" />
+        <Pressable testID="blocked-users-row" onPress={() => setBlocksOpen(true)} style={s.row}>
+          <Ionicons name="ban-outline" size={18} color={colors.onSurfaceTertiary} />
+          <Text style={s.rowText}>Blocked users</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
       </View>
 
       <Btn testID="logout-button" title="Log out" variant="ghost" icon="log-out-outline" onPress={logout} />
+      {photo.ui}
+      <BlockedSheet visible={blocksOpen} onClose={() => setBlocksOpen(false)} />
     </ScrollView>
+  );
+}
+
+function BlockedSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const s = useStyles();
+  const toast = useToast();
+  const q = useQuery({ queryKey: ["blocks"], queryFn: () => api<User[]>("/me/blocks"), enabled: visible });
+  const qc = useQueryClient();
+  const unblock = async (u: User) => {
+    try {
+      await api(`/users/${u.user_id}/block`, { method: "DELETE" });
+      qc.invalidateQueries({ queryKey: ["blocks"] });
+      qc.invalidateQueries({ queryKey: ["discover"] });
+      qc.invalidateQueries({ queryKey: ["chats"] });
+      qc.invalidateQueries({ queryKey: ["parties"] });
+      toast(`${u.name} unblocked`);
+    } catch (e) { toast((e as Error).message, "err"); }
+  };
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Blocked users" sub="Blocked people can't see you anywhere in the app." testID="blocked-sheet">
+      {q.isLoading ? <ActivityIndicator /> : (q.data ?? []).length === 0 ? (
+        <Text style={s.rowText} testID="blocked-empty">Nobody blocked. Keep it that way.</Text>
+      ) : (q.data ?? []).map((u) => (
+        <View key={u.user_id} style={s.row} testID={`blocked-${u.user_id}`}>
+          <Avatar uri={u.picture} name={u.name} size={36} />
+          <Text style={[s.rowText, { fontWeight: "700" }]}>{u.name}</Text>
+          <Btn testID={`unblock-${u.user_id}`} title="Unblock" variant="ghost" onPress={() => unblock(u)} style={{ height: 36, paddingHorizontal: 14 }} />
+        </View>
+      ))}
+      <Btn title="Done" variant="ghost" onPress={onClose} />
+    </Sheet>
   );
 }
 

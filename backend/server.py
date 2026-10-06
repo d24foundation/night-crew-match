@@ -1,5 +1,10 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadFile, File
+from fastapi.responses import Response
+from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
+import math
+import secrets
+import requests
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
@@ -40,6 +45,70 @@ COVERS = [
     "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=900",
     "https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=900",
 ]
+
+
+CITY_COORDS = {
+    "London": (51.5074, -0.1278), "Manchester": (53.4808, -2.2426), "Ibiza": (38.9067, 1.4206), "Berlin": (52.52, 13.405),
+    "Paris": (48.8566, 2.3522), "Amsterdam": (52.3676, 4.9041), "New York": (40.7128, -74.006), "Dubai": (25.2048, 55.2708), "Lagos": (6.5244, 3.3792),
+}
+AREA_COORDS = {
+    "Hackney Wick": (51.5436, -0.0229), "Farringdon": (51.5203, -0.1053), "Brixton": (51.4613, -0.1156),
+    "Northern Quarter": (53.4839, -2.2360), "San Antonio": (38.9807, 1.3030), "Kreuzberg": (52.4987, 13.4034),
+}
+
+
+def coords_for(city: str, area: str, lat: Optional[float] = None, lng: Optional[float] = None):
+    if lat is not None and lng is not None:
+        return lat, lng
+    if area in AREA_COORDS:
+        return AREA_COORDS[area]
+    base = CITY_COORDS.get(city, CITY_COORDS["London"])
+    # Rough area position: scatter within ~3km of the city centre so the map isn't one stacked pin
+    return round(base[0] + random.uniform(-0.03, 0.03), 5), round(base[1] + random.uniform(-0.04, 0.04), 5)
+
+
+def haversine_km(a_lat: float, a_lng: float, b_lat: float, b_lng: float) -> float:
+    r = 6371.0
+    p1, p2 = math.radians(a_lat), math.radians(b_lat)
+    dp, dl = math.radians(b_lat - a_lat), math.radians(b_lng - a_lng)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+# ---------------- Object storage (Emergent managed) ----------------
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+STORAGE_APP = "after-party"
+MAX_PHOTO_BYTES = 6 * 1024 * 1024
+_storage_key: Optional[str] = None
+
+
+def init_storage() -> str:
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": os.environ.get("EMERGENT_LLM_KEY")}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    global _storage_key
+    resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage(), "Content-Type": content_type}, data=data, timeout=120)
+    if resp.status_code == 503:
+        _storage_key = None
+        resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage(), "Content-Type": content_type}, data=data, timeout=120)
+    return resp
+
+
+def get_object(path: str):
+    global _storage_key
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage()}, timeout=60)
+    if resp.status_code == 503:
+        _storage_key = None
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": init_storage()}, timeout=60)
+    return resp
 
 
 def now() -> datetime:
@@ -337,6 +406,98 @@ async def update_me(body: ProfileIn, u=Depends(current_user)):
     return public_user(u, True)
 
 
+@api.post("/me/photo")
+async def upload_photo(file: UploadFile = File(...), u=Depends(current_user)):
+    ctype = (file.content_type or "").lower()
+    if ctype not in ("image/jpeg", "image/png", "image/webp", "image/heic"):
+        raise HTTPException(400, "Please upload a JPG, PNG or WebP photo")
+    data = await file.read()
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Photo too large (max 6MB)")
+    ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic"}[ctype]
+    file_id = uuid.uuid4().hex
+    path = f"{STORAGE_APP}/uploads/{u['user_id']}/{file_id}.{ext}"
+    try:
+        resp = await run_in_threadpool(put_object, path, data, ctype)
+    except Exception as e:
+        logger.warning("storage upload failed: %s", e)
+        raise HTTPException(502, "Photo storage unavailable, try again")
+    if resp.status_code == 402:
+        raise HTTPException(402, "Photo storage credits exhausted")
+    if resp.status_code >= 400:
+        logger.warning("storage upload %s: %s", resp.status_code, resp.text[:200])
+        raise HTTPException(502, "Photo upload failed, try again")
+    await db.files.insert_one({"file_id": file_id, "owner_id": u["user_id"], "storage_path": path, "content_type": ctype,
+                               "size": len(data), "public": True, "created_at": iso(now())})
+    picture = f"/api/files/{file_id}"
+    await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"picture": picture}})
+    u["picture"] = picture
+    return public_user(u, True)
+
+
+@api.get("/files/{file_id}")
+async def get_file(file_id: str):
+    f = await db.files.find_one({"file_id": file_id, "public": True}, {"_id": 0})
+    if not f:
+        raise HTTPException(404, "File not found")
+    try:
+        resp = await run_in_threadpool(get_object, f["storage_path"])
+    except Exception as e:
+        logger.warning("storage read failed: %s", e)
+        raise HTTPException(502, "Storage unavailable")
+    if resp.status_code >= 400:
+        raise HTTPException(404, "File not found")
+    return Response(content=resp.content, media_type=f["content_type"], headers={"Cache-Control": "public, max-age=86400, immutable"})
+
+
+# ---------------- Safety: block / report ----------------
+class ReportIn(BaseModel):
+    target_id: str
+    reason: Literal["harassment", "fake", "unsafe", "spam", "other"]
+    details: str = Field("", max_length=500)
+    context: Optional[str] = None  # chat_id or party_id
+
+
+async def blocked_ids(uid: str) -> set:
+    docs = await db.blocks.find({"$or": [{"user_id": uid}, {"blocked_id": uid}]}, {"_id": 0}).to_list(2000)
+    return {d["blocked_id"] if d["user_id"] == uid else d["user_id"] for d in docs}
+
+
+@api.post("/users/{target_id}/block", status_code=201)
+async def block_user(target_id: str, u=Depends(current_user)):
+    if target_id == u["user_id"]:
+        raise HTTPException(400, "You can't block yourself")
+    if not await db.users.find_one({"user_id": target_id}):
+        raise HTTPException(404, "User not found")
+    await db.blocks.update_one({"user_id": u["user_id"], "blocked_id": target_id}, {"$set": {"created_at": iso(now())}}, upsert=True)
+    return {"blocked": True}
+
+
+@api.delete("/users/{target_id}/block")
+async def unblock_user(target_id: str, u=Depends(current_user)):
+    await db.blocks.delete_one({"user_id": u["user_id"], "blocked_id": target_id})
+    return {"blocked": False}
+
+
+@api.get("/me/blocks")
+async def my_blocks(u=Depends(current_user)):
+    docs = await db.blocks.find({"user_id": u["user_id"]}, {"_id": 0}).to_list(500)
+    ids = [d["blocked_id"] for d in docs]
+    users = await db.users.find({"user_id": {"$in": ids}}, {"_id": 0}).to_list(500)
+    return [public_user(x) for x in users]
+
+
+@api.post("/reports", status_code=201)
+async def report_user(body: ReportIn, u=Depends(current_user)):
+    if body.target_id == u["user_id"]:
+        raise HTTPException(400, "You can't report yourself")
+    if not await db.users.find_one({"user_id": body.target_id}):
+        raise HTTPException(404, "User not found")
+    await db.reports.insert_one({"report_id": new_id("report"), "reporter_id": u["user_id"], **body.model_dump(),
+                                 "status": "open", "created_at": iso(now())})
+    return {"reported": True}
+
+
 @api.post("/me/boost")
 async def boost(u=Depends(current_user)):
     if effective_tier(u) == "free":
@@ -359,13 +520,15 @@ class PartyIn(BaseModel):
     drinks_needed: int = Field(3, ge=0, le=50)
     chip_in: float = Field(5, ge=0, le=100)
     capacity: int = Field(15, ge=2, le=200)
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
 
 
 class JoinIn(BaseModel):
     role: Literal["house", "drinks", "chipin"]
 
 
-def party_view(p: dict, viewer: dict, hosts: dict, users: dict) -> dict:
+def party_view(p: dict, viewer: dict, hosts: dict, users: dict, me_pos: Optional[tuple] = None) -> dict:
     uid = viewer["user_id"]
     is_host = p["host_id"] == uid
     attending = any(a["user_id"] == uid for a in p.get("attendees", []))
@@ -374,7 +537,11 @@ def party_view(p: dict, viewer: dict, hosts: dict, users: dict) -> dict:
     atts = p.get("attendees", [])
     out = {k: p[k] for k in ["party_id", "title", "description", "city", "area", "starts_at", "vibe",
                              "house_provided", "drinks_needed", "chip_in", "capacity", "cover", "host_id"]}
+    lat, lng = p.get("lat"), p.get("lng")
     out.update({
+        "lat": lat, "lng": lng,
+        "distance_km": round(haversine_km(me_pos[0], me_pos[1], lat, lng), 1) if (me_pos and lat is not None and lng is not None) else None,
+        "invite_code": p.get("invite_code") if is_host else None,
         "host": public_user(host) if host else None,
         "going_count": len(atts) + 1,
         "drinks_count": sum(1 for a in atts if a["role"] == "drinks"),
@@ -400,13 +567,17 @@ async def load_people(parties: List[dict]):
 
 
 @api.get("/parties")
-async def list_parties(city: Optional[str] = None, u=Depends(current_user)):
+async def list_parties(city: Optional[str] = None, lat: Optional[float] = None, lng: Optional[float] = None, u=Depends(current_user)):
     q = {"starts_at": {"$gte": iso(now() - timedelta(hours=8))}}
     if city and city != "All":
         q["city"] = city
+    blocked = await blocked_ids(u["user_id"])
+    if blocked:
+        q["host_id"] = {"$nin": list(blocked)}
     parties = await db.parties.find(q, {"_id": 0}).sort("starts_at", 1).to_list(200)
     hosts, users = await load_people(parties)
-    views = [party_view(p, u, hosts, users) for p in parties]
+    me_pos = (lat, lng) if (lat is not None and lng is not None) else None
+    views = [party_view(p, u, hosts, users, me_pos) for p in parties]
     # Host priority: Super Premium hosts float to the top
     views.sort(key=lambda v: 0 if (v["host"] and v["host"]["tier"] == "super") else 1)
     return views
@@ -424,8 +595,9 @@ async def create_party(body: PartyIn, u=Depends(current_user)):
     if not parse_dt(body.starts_at):
         raise HTTPException(400, "Invalid start time")
     p = body.model_dump()
-    p.update({"party_id": new_id("party"), "host_id": u["user_id"], "attendees": [],
-              "cover": random.choice(COVERS), "created_at": iso(now())})
+    lat, lng = coords_for(body.city, body.area, body.lat, body.lng)
+    p.update({"party_id": new_id("party"), "host_id": u["user_id"], "attendees": [], "lat": lat, "lng": lng,
+              "invite_code": secrets.token_urlsafe(6), "cover": random.choice(COVERS), "created_at": iso(now())})
     await db.parties.insert_one(dict(p))
     hosts, users = await load_people([p])
     return party_view(p, u, hosts, users)
@@ -440,26 +612,70 @@ async def get_party(party_id: str, u=Depends(current_user)):
     return party_view(p, u, hosts, users)
 
 
-@api.post("/parties/{party_id}/join")
-async def join_party(party_id: str, body: JoinIn, u=Depends(current_user)):
-    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
-    if not p:
-        raise HTTPException(404, "Party not found")
+async def do_join(p: dict, u: dict, role: str, invited: bool = False):
+    party_id = p["party_id"]
     if p["host_id"] == u["user_id"]:
         raise HTTPException(400, "You're the host")
     if any(a["user_id"] == u["user_id"] for a in p["attendees"]):
         raise HTTPException(400, "Already going")
     if len(p["attendees"]) + 1 >= p["capacity"]:
         raise HTTPException(400, "Party is full")
-    if effective_tier(u) == "free":
+    if p["host_id"] in await blocked_ids(u["user_id"]):
+        raise HTTPException(403, "You can't join this party")
+    if not invited and effective_tier(u) == "free":
         since = iso(now() - timedelta(hours=24))
         n = await db.parties.count_documents({"attendees": {"$elemMatch": {"user_id": u["user_id"], "joined_at": {"$gte": since}}}})
         if n >= FREE_JOINS_PER_DAY:
             raise HTTPException(402, f"Free plan: {FREE_JOINS_PER_DAY} joins per day. Go Premium for unlimited.")
-    await db.parties.update_one({"party_id": party_id}, {"$push": {"attendees": {"user_id": u["user_id"], "role": body.role, "joined_at": iso(now())}}})
-    role_txt = {"drinks": "is bringing drinks", "chipin": "is chipping in", "house": "can offer a house"}[body.role]
-    await notify([p["host_id"]], {"title": f"{u.get('name')} is down for {p['title']}", "message": f"{u.get('name')} {role_txt}. Party's growing!", "action_url": f"/party/{party_id}"})
+    await db.parties.update_one({"party_id": party_id}, {"$push": {"attendees": {"user_id": u["user_id"], "role": role, "joined_at": iso(now()), "invited": invited}}})
+    role_txt = {"drinks": "is bringing drinks", "chipin": "is chipping in", "house": "can offer a house"}[role]
+    await notify([p["host_id"]], {"title": f"{u.get('name')} is down for {p['title']}", "message": f"{u.get('name')} {role_txt}{' (via your invite link)' if invited else ''}. Party's growing!", "action_url": f"/party/{party_id}"})
     return await get_party(party_id, u)
+
+
+@api.post("/parties/{party_id}/join")
+async def join_party(party_id: str, body: JoinIn, u=Depends(current_user)):
+    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Party not found")
+    return await do_join(p, u, body.role)
+
+
+@api.get("/parties/{party_id}/invite")
+async def party_invite(party_id: str, u=Depends(current_user)):
+    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Party not found")
+    if p["host_id"] != u["user_id"]:
+        raise HTTPException(403, "Only the host can share the invite link")
+    code = p.get("invite_code")
+    if not code:
+        code = secrets.token_urlsafe(6)
+        await db.parties.update_one({"party_id": party_id}, {"$set": {"invite_code": code}})
+    return {"invite_code": code, "party_id": party_id}
+
+
+class InviteAcceptIn(BaseModel):
+    role: Literal["house", "drinks", "chipin"] = "chipin"
+
+
+@api.get("/invites/{code}")
+async def invite_preview(code: str, u=Depends(current_user)):
+    p = await db.parties.find_one({"invite_code": code}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "This invite link has expired")
+    hosts, users = await load_people([p])
+    return party_view(p, u, hosts, users)
+
+
+@api.post("/invites/{code}/accept")
+async def invite_accept(code: str, body: InviteAcceptIn, u=Depends(current_user)):
+    p = await db.parties.find_one({"invite_code": code}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "This invite link has expired")
+    if p["host_id"] == u["user_id"] or any(a["user_id"] == u["user_id"] for a in p["attendees"]):
+        return await get_party(p["party_id"], u)
+    return await do_join(p, u, body.role, invited=True)
 
 
 @api.post("/parties/{party_id}/leave")
@@ -477,7 +693,8 @@ class SwipeIn(BaseModel):
 @api.get("/discover")
 async def discover(u=Depends(current_user)):
     swiped = await db.swipes.distinct("target_id", {"user_id": u["user_id"]})
-    docs = await db.users.find({"user_id": {"$nin": swiped + [u["user_id"]]}}, {"_id": 0}).to_list(100)
+    excluded = set(swiped) | {u["user_id"]} | await blocked_ids(u["user_id"])
+    docs = await db.users.find({"user_id": {"$nin": list(excluded)}}, {"_id": 0}).to_list(100)
     city = u.get("city", "London")
     people = [public_user(d) for d in docs]
     people.sort(key=lambda p: (0 if p["boosted"] else 1, 0 if p["city"] == city else 1, 0 if p["verified"] else 1))
@@ -489,6 +706,8 @@ async def swipe(body: SwipeIn, u=Depends(current_user)):
     target = await db.users.find_one({"user_id": body.target_id}, {"_id": 0})
     if not target:
         raise HTTPException(404, "User not found")
+    if body.target_id in await blocked_ids(u["user_id"]):
+        raise HTTPException(403, "This user is blocked")
     if body.like and effective_tier(u) == "free":
         since = iso(now() - timedelta(hours=24))
         n = await db.swipes.count_documents({"user_id": u["user_id"], "like": True, "created_at": {"$gte": since}})
@@ -512,7 +731,9 @@ async def swipe(body: SwipeIn, u=Depends(current_user)):
 
 @api.get("/matches")
 async def matches(u=Depends(current_user)):
+    blocked = await blocked_ids(u["user_id"])
     ms = await db.matches.find({"users": u["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    ms = [m for m in ms if not (set(m["users"]) & blocked)]
     others = [x for m in ms for x in m["users"] if x != u["user_id"]]
     docs = {d["user_id"]: d for d in await db.users.find({"user_id": {"$in": others}}, {"_id": 0}).to_list(500)}
     return [{"match_id": m["match_id"], "user": public_user(docs[o])} for m in ms for o in m["users"] if o != u["user_id"] and o in docs]
@@ -532,15 +753,20 @@ async def chat_access(chat_id: str, u: dict) -> dict:
         m = await db.matches.find_one({"match_id": chat_id, "users": u["user_id"]}, {"_id": 0})
         if m:
             other = next(x for x in m["users"] if x != u["user_id"])
+            if other in await blocked_ids(u["user_id"]):
+                raise HTTPException(403, "This chat is unavailable")
             o = await db.users.find_one({"user_id": other}, {"_id": 0})
-            return {"title": o.get("name") if o else "Match", "kind": "match", "picture": o.get("picture") if o else None}
+            return {"title": o.get("name") if o else "Match", "kind": "match", "picture": o.get("picture") if o else None, "other_user_id": other}
     raise HTTPException(403, "No access to this chat")
 
 
 @api.get("/chats")
 async def chats(u=Depends(current_user)):
     items = []
+    blocked = await blocked_ids(u["user_id"])
     for p in await my_parties(u):
+        if p["host_id"] in blocked:
+            continue
         items.append({"chat_id": p["party_id"], "title": p["title"], "kind": "party", "picture": p["cover"], "subtitle": f"{p['going_count']} going · {p['area']}"})
     for m in await matches(u):
         items.append({"chat_id": m["match_id"], "title": m["user"]["name"], "kind": "match", "picture": m["user"]["picture"], "subtitle": "New match — say hi"})
@@ -556,7 +782,8 @@ async def chats(u=Depends(current_user)):
 @api.get("/chats/{chat_id}")
 async def chat_messages(chat_id: str, u=Depends(current_user)):
     info = await chat_access(chat_id, u)
-    msgs = await db.messages.find({"chat_id": chat_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    blocked = await blocked_ids(u["user_id"])
+    msgs = await db.messages.find({"chat_id": chat_id, "sender_id": {"$nin": list(blocked)}}, {"_id": 0}).sort("created_at", 1).to_list(500)
     return {**info, "chat_id": chat_id, "messages": msgs}
 
 
@@ -674,6 +901,13 @@ async def startup():
     await db.parties.create_index("party_id", unique=True)
     await db.messages.create_index([("chat_id", 1), ("created_at", 1)])
     await db.payment_transactions.create_index("session_id", unique=True)
+    await db.blocks.create_index([("user_id", 1), ("blocked_id", 1)], unique=True)
+    await db.files.create_index("file_id", unique=True)
+    await db.parties.create_index("invite_code")
+    try:
+        await run_in_threadpool(init_storage)
+    except Exception as e:
+        logger.warning("object storage init failed: %s", e)
     pw = bcrypt.hashpw(b"demo1234", bcrypt.gensalt()).decode()
     ids = {}
     for name, age, city, pic, vibes, bio, tier in DEMO:
@@ -703,13 +937,23 @@ async def startup():
                 await db.parties.update_one({"title": title}, {"$set": {"starts_at": start}})
             continue
         others = [ids[n] for n in ids if n != host][: (i % 3) + 2]
+        lat, lng = coords_for(city, area)
         await db.parties.insert_one({
-            "party_id": new_id("party"), "host_id": ids[host], "title": title, "city": city, "area": area,
+            "party_id": new_id("party"), "host_id": ids[host], "title": title, "city": city, "area": area, "lat": lat, "lng": lng,
+            "invite_code": secrets.token_urlsafe(6),
             "address": f"{random.randint(2, 99)} Secret Lane, {area}", "starts_at": start, "vibe": vibe,
             "description": f"{vibe} all night. Bring good energy, {'house is sorted' if house else 'need a house!'}. Chip in and let's keep it going.",
             "house_provided": house, "drinks_needed": drinks, "chip_in": chip, "capacity": cap, "cover": COVERS[i % len(COVERS)],
             "attendees": [{"user_id": o, "role": random.choice(["drinks", "chipin"]), "joined_at": iso(now() - timedelta(days=2))} for o in others],
             "created_at": iso(now())})
+    # Backfill map pins + invite codes for parties created before those fields existed
+    async for p in db.parties.find({"$or": [{"lat": {"$exists": False}}, {"invite_code": {"$exists": False}}]}, {"_id": 0}):
+        upd = {}
+        if p.get("lat") is None:
+            upd["lat"], upd["lng"] = coords_for(p["city"], p["area"])
+        if not p.get("invite_code"):
+            upd["invite_code"] = secrets.token_urlsafe(6)
+        await db.parties.update_one({"party_id": p["party_id"]}, {"$set": upd})
 
 
 app.include_router(api)

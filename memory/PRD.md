@@ -33,9 +33,14 @@ Mobile app that connects people for after-parties when clubs close (or during th
 - Pricing verified in GBP everywhere: backend PLANS (3.99/7.99, currency "gbp"), Stripe checkout, RevenueCat products, paywall UI
 - Login wordmark scales with screen width (85% of content width, shrink-to-fit on native) so it never overflows or leaves a gap
 - Paywall plan cards: header wraps (name + pill) with a non-shrinking price so £3.99/£7.99 are always visible on narrow phones
+- Party Map: parties have lat/lng (+distance_km when ?lat&lng); feed list/map toggle, "Near me" chip, contextual location permission (src/location.tsx); native react-native-maps pins (src/party-map.tsx), web fallback closest-first list (party-map.web.tsx); create party "pin at my location"
+- Profile photos: POST /api/me/photo → Emergent object storage, served via GET /api/files/{id}; picker sheet (library/camera with Settings nudge) on Profile + Edit profile; Avatar resolves relative URLs
+- Invite links: GET /parties/{id}/invite (host), GET /invites/{code}, POST /invites/{code}/accept (bypasses free join limit); /invite/[code] landing screen, share via Share sheet (clipboard on web); pending invite preserved through login
+- Safety: block/unblock/report endpoints; blocked users hidden from discover, matches, chats, feed, messages; SafetySheet on swipe, match chat header, party chat long-press, party detail; Blocked users list in Profile
 
 ## Backlog
 - P0: Push notifications (need google-services.json)
-- P1: Profile photo upload (object storage), real-time chat (websockets), map view of parties
-- P1: Report/block users, age verification
-- P2: Invite-link sharing with referral rewards, party ratings, check-in QR
+- P1: Real-time chat (websockets)
+- P1: Age verification
+- P2: Party ratings, check-in QR, referral rewards
+- Note: Android production builds need a Google Maps API key in app.json (android.config.googleMaps.apiKey); Expo Go and iOS work without it

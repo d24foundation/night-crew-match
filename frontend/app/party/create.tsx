@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, CITIES, Party, VIBES } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { useLocation } from "@/src/location";
 import { Btn, Chip, IconBtn, Ionicons, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -32,6 +33,14 @@ export default function CreateParty() {
   const [chip, setChip] = useState(5);
   const [cap, setCap] = useState(15);
   const [busy, setBusy] = useState(false);
+  const [pin, setPin] = useState(false);
+  const loc = useLocation();
+
+  const togglePin = async (v: boolean) => {
+    if (!v) { setPin(false); return; }
+    const c = await loc.locate();
+    setPin(!!c);
+  };
 
   const [hyping, setHyping] = useState(false);
   const hype = async () => {
@@ -51,7 +60,8 @@ export default function CreateParty() {
       const p = await api<Party>("/parties", { body: {
         title: title.trim(), description: desc.trim(), city, area: area.trim(), address: address.trim(), vibe,
         starts_at: new Date(Date.now() + startH * 3600e3).toISOString(), house_provided: house,
-        drinks_needed: drinks, chip_in: chip, capacity: cap } });
+        drinks_needed: drinks, chip_in: chip, capacity: cap,
+        ...(pin && loc.coords ? { lat: loc.coords.lat, lng: loc.coords.lng } : {}) } });
       qc.invalidateQueries({ queryKey: ["parties"] });
       qc.invalidateQueries({ queryKey: ["chats"] });
       toast("Your afters is live");
@@ -83,6 +93,14 @@ export default function CreateParty() {
         <Field label="Address (only shown to people who join)">
           <TextInput testID="party-address-input" style={s.input} placeholder="Flat & street" placeholderTextColor={colors.muted} value={address} onChangeText={setAddress} />
         </Field>
+        <View style={s.toggle}>
+          <Ionicons name="navigate" size={20} color={colors.brandSecondary} />
+          <View style={{ flex: 1 }}>
+            <Text style={s.toggleText}>Pin it at my current location</Text>
+            <Text style={s.hint}>{pin && loc.coords ? "Map pin set to where you are now" : "Otherwise we place the pin roughly in your area"}</Text>
+          </View>
+          <Switch testID="pin-location-switch" value={pin} onValueChange={togglePin} trackColor={{ true: colors.brandPrimary, false: colors.surfaceTertiary }} thumbColor={colors.onSurface} />
+        </View>
         <Field label="Starts">
           <ChipRow items={STARTS.map((x) => x.l)} value={STARTS.find((x) => x.h === startH)!.l} onChange={(l) => setStartH(STARTS.find((x) => x.l === l)!.h)} prefix="start" />
         </Field>
@@ -99,6 +117,7 @@ export default function CreateParty() {
         </Field>
         <Btn testID="create-party-submit-button" title="Post my afters" icon="flame" loading={busy} onPress={submit} />
       </KeyboardAwareScrollView>
+      {loc.ui}
     </View>
   );
 }
@@ -138,6 +157,7 @@ const useStyles = makeStyles((c) => ({
   input: { height: 52, borderRadius: radius.md, backgroundColor: c.surfaceTertiary, color: c.onSurface, paddingHorizontal: spacing.md, fontSize: 16, borderWidth: 1, borderColor: c.border },
   toggle: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: radius.md, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.border },
   toggleText: { color: c.onSurface, fontWeight: "700", flex: 1 },
+  hint: { color: c.muted, fontSize: 12, marginTop: 2 },
   step: { width: 36, height: 36, borderRadius: 18, backgroundColor: c.surfaceTertiary, alignItems: "center", justifyContent: "center" },
   stepVal: { color: c.onSurface, fontWeight: "900", minWidth: 40, textAlign: "center", fontSize: 16 },
 }));

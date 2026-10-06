@@ -1,19 +1,21 @@
-import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Share, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Clipboard from "expo-clipboard";
 
-import { api, ApiError, Party } from "@/src/api";
+import { api, ApiError, fmtDistance, inviteLink, Party } from "@/src/api";
+import { SafetySheet } from "@/src/safety";
 import { Avatar, Btn, formatStart, IconBtn, Ionicons, TierBadge, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Role = "drinks" | "chipin" | "house";
 
 export default function PartyDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, invite } = useLocalSearchParams<{ id: string; invite?: string }>();
   const s = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -23,7 +25,46 @@ export default function PartyDetail() {
   const q = useQuery({ queryKey: ["party", id], queryFn: () => api<Party>(`/parties/${id}`) });
   const [role, setRole] = useState<Role>("chipin");
   const [busy, setBusy] = useState(false);
+  const [safety, setSafety] = useState<{ user_id: string; name: string } | null>(null);
   const p = q.data;
+
+  // Arrived via an invite link: auto-join once (invites bypass the free daily join limit).
+  const inviteTried = useRef(false);
+  useEffect(() => {
+    if (!invite || !p || p.attending || p.is_host || inviteTried.current) return;
+    inviteTried.current = true;
+    (async () => {
+      try {
+        const r = await api<Party>(`/invites/${invite}/accept`, { body: { role: "chipin" } });
+        qc.setQueryData(["party", id], r);
+        qc.invalidateQueries({ queryKey: ["parties"] });
+        qc.invalidateQueries({ queryKey: ["chats"] });
+        toast("You're in via invite — address unlocked");
+      } catch (e) { toast((e as Error).message, "err"); }
+    })();
+  }, [invite, p, id, qc, toast]);
+
+  const share = async () => {
+    if (!p) return;
+    try {
+      const { invite_code } = await api<{ invite_code: string }>(`/parties/${id}/invite`);
+      const url = inviteLink(invite_code);
+      const message = `You're invited to ${p.title} — ${p.area}, ${p.city}. Tap to join the afters + group chat: ${url}`;
+      if (Platform.OS === "web") {
+        await Clipboard.setStringAsync(url);
+        toast("Invite link copied — paste it anywhere");
+        return;
+      }
+      const r = await Share.share(Platform.OS === "ios" ? { message, url } : { message });
+      if (r.action === Share.sharedAction) toast("Invite sent");
+    } catch (e) { toast((e as Error).message, "err"); }
+  };
+
+  const openMaps = () => {
+    if (!p?.address) return;
+    const q = encodeURIComponent(`${p.address}, ${p.city}`);
+    Linking.openURL(Platform.select({ ios: `maps:0,0?q=${q}`, default: `https://www.google.com/maps/search/?api=1&query=${q}` })!);
+  };
 
   const act = async (path: string, body?: object) => {
     setBusy(true);
@@ -55,11 +96,14 @@ export default function PartyDetail() {
           <LinearGradient colors={["transparent", colors.surface]} style={s.heroShade} />
           <View style={[s.topBar, { top: insets.top + 8 }]}>
             <IconBtn testID="party-back-button" icon="chevron-back" onPress={() => router.back()} />
+            <View style={{ flex: 1 }} />
+            {p.is_host && <IconBtn testID="share-invite-button" icon="share-social" onPress={share} />}
+            {!p.is_host && p.host && <IconBtn testID="party-safety-button" icon="ellipsis-horizontal" onPress={() => setSafety({ user_id: p.host!.user_id, name: p.host!.name })} />}
           </View>
           <View style={s.heroText}>
             <View style={s.timePill}><Ionicons name="time" size={12} color={colors.onBrandSecondary} /><Text style={s.timeText}>{formatStart(p.starts_at)}</Text></View>
             <Text style={s.title} testID="party-title">{p.title}</Text>
-            <Text style={s.area}>{p.vibe} · {p.area}, {p.city}</Text>
+            <Text style={s.area}>{p.vibe} · {p.area}, {p.city}{p.distance_km != null ? ` · ${fmtDistance(p.distance_km)} away` : ""}</Text>
           </View>
         </View>
 
@@ -84,23 +128,35 @@ export default function PartyDetail() {
 
           {!!p.description && <Text style={s.desc}>{p.description}</Text>}
 
-          <View style={s.addr} testID="party-address">
+          {p.is_host && (
+            <Pressable testID="invite-card" onPress={share} style={s.invite}>
+              <Ionicons name="link" size={22} color={colors.onBrandSecondary} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.inviteTitle}>Invite your people</Text>
+                <Text style={s.inviteSub}>Share a link that drops friends straight into the party + chat</Text>
+              </View>
+              <Ionicons name="share-social" size={20} color={colors.onBrandSecondary} />
+            </Pressable>
+          )}
+
+          <Pressable style={s.addr} testID="party-address" onPress={openMaps} disabled={!p.address}>
             <Ionicons name={p.address ? "location" : "lock-closed"} size={18} color={p.address ? colors.brandSecondary : colors.muted} />
             <Text style={[s.addrText, !p.address && { color: colors.muted }]}>{p.address ?? "Exact address unlocks when you join"}</Text>
-          </View>
+            {!!p.address && <Ionicons name="navigate" size={18} color={colors.brandSecondary} />}
+          </Pressable>
 
           <Text style={s.section}>Who's going</Text>
           {p.can_see_attendees ? (
             <View style={{ gap: 10 }} testID="attendee-list">
               {p.attendees.length === 0 && <Text style={s.muted}>No one yet — be first.</Text>}
               {p.attendees.map((a) => (
-                <View key={a.user_id} style={s.att}>
+                <Pressable key={a.user_id} style={s.att} testID={`attendee-${a.user_id}`} onLongPress={() => setSafety({ user_id: a.user_id, name: a.name })}>
                   <Avatar uri={a.picture} name={a.name} size={36} />
                   <Text style={s.attName}>{a.name}</Text>
                   <TierBadge tier={a.tier} />
                   <View style={{ flex: 1 }} />
                   <Text style={s.attRole}>{a.role === "drinks" ? "Drinks" : a.role === "house" ? "House" : "Chip-in"}</Text>
-                </View>
+                </Pressable>
               ))}
             </View>
           ) : (
@@ -148,6 +204,7 @@ export default function PartyDetail() {
           <Btn testID="join-party-button" title={p.going_count >= p.capacity ? "Party is full" : "I'm down — join"} icon="flame" loading={busy} disabled={p.going_count >= p.capacity} onPress={() => act("join", { role })} />
         )}
       </View>
+      <SafetySheet target={safety} context={p.party_id} onClose={() => setSafety(null)} onBlocked={(uid) => { if (uid === p.host_id) router.back(); else q.refetch(); }} />
     </View>
   );
 }
@@ -167,7 +224,7 @@ const useStyles = makeStyles((c) => ({
   root: { flex: 1, backgroundColor: c.surface },
   hero: { width: "100%", height: 320 },
   heroShade: { position: "absolute", left: 0, right: 0, bottom: 0, height: 200 },
-  topBar: { position: "absolute", left: 16 },
+  topBar: { position: "absolute", left: 16, right: 16, flexDirection: "row", alignItems: "center", gap: 8 },
   heroText: { position: "absolute", left: 16, right: 16, bottom: 8, gap: 6 },
   timePill: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: c.brandSecondary, paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill },
   timeText: { color: c.onBrandSecondary, fontWeight: "800", fontSize: 12 },
@@ -184,6 +241,9 @@ const useStyles = makeStyles((c) => ({
   desc: { color: c.onSurfaceSecondary, fontSize: 15, lineHeight: 22 },
   addr: { flexDirection: "row", alignItems: "center", gap: 10, padding: 14, borderRadius: radius.md, backgroundColor: c.surfaceTertiary },
   addrText: { color: c.onSurface, fontWeight: "700", flex: 1 },
+  invite: { flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: radius.md, backgroundColor: c.brandSecondary },
+  inviteTitle: { color: c.onBrandSecondary, fontWeight: "900", fontSize: 16 },
+  inviteSub: { color: c.onBrandSecondary, opacity: 0.75, fontSize: 13, fontWeight: "600" },
   section: { color: c.onSurface, fontSize: 18, fontWeight: "900", marginTop: 4 },
   att: { flexDirection: "row", alignItems: "center", gap: 10 },
   attName: { color: c.onSurface, fontWeight: "700" },

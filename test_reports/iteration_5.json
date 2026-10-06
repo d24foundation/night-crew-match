@@ -1,0 +1,40 @@
+{
+  "summary": "Full backend + frontend verification of the four new After Party features: Party Map (lat/lng + distance_km), Profile Photos (upload + /api/files serving), Invite Links, and Safety (block/unblock/report). All 8 new backend tests pass (/app/backend/tests/test_new_features.py) and the existing regression suite (/app/backend/tests/backend_test.py) still passes (25 passed, 3 skipped — same cross-worker xdist skips as prior iterations). All 5 frontend acceptance checks pass at 390x844: (1) feed list ⇄ map toggle works, location-permission-sheet appears on first tap of view-map-button, tapping location-later-button reveals party-map with 6 map-row-<id> items, view-list-button restores party cards; (2) Profile → change-photo-button opens photo-sheet with photo-library-button; blocked-users-row opens blocked-sheet showing blocked-empty state; (3) Swipe → swipe-safety-button → safety-sheet → safety-report-option → report-reason-spam → report-submit-button shows 'Thanks — our team will review this report' toast and sheet closes; (4) /invite/<valid> shows invite-card with invite-party-title='Hackney Loft Afters' and tapping invite-accept-button navigates to /party/<id> with 'You're in — address unlocked' toast; /invite/badcode shows invite-expired; (5) as host (kofi) the party detail shows share-invite-button + invite-card and clicking the card shows 'Invite link copied' toast, while as non-host (test@) the party-safety-button ('...') appears in the header and share/invite elements are absent. No console errors beyond the pre-existing non-blocking react-native-web textShadow*/shadow* deprecation warnings carried over from prior iterations.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "backend_test_summary": {
+    "new_feature_suite": "/app/backend/tests/test_new_features.py — 8/8 passed (TestPartyMap x3, TestPhotoUpload x2, TestInvite x2, TestSafety x1)",
+    "regression_suite": "/app/backend/tests/backend_test.py — 25 passed, 3 skipped (xdist cross-worker fixture skips in TestChat, same as iteration_3)",
+    "junit_reports": ["/app/test_reports/pytest/pytest_results.xml", "/app/test_reports/pytest/pytest_regression.xml"]
+  },
+  "frontend_acceptance_results": {
+    "feed_toggle_and_map": {"view_map_button": true, "view_list_button": true, "party_card_count_initial": 6, "location_permission_sheet": true, "party_map_visible_after_later": true, "map_row_count": 6, "party_cards_after_list_toggle": 6},
+    "profile_photo_and_blocked": {"profile_avatar": true, "change_photo_button": true, "photo_sheet": true, "photo_library_button": true, "blocked_users_row": true, "blocked_sheet": true, "blocked_empty": true},
+    "swipe_safety_flow": {"swipe_safety_button": true, "safety_sheet": true, "safety_report_option": true, "report_reason_spam": true, "report_submit_button": true, "toast_after_submit": "Thanks — our team will review this report", "sheet_closed_after_submit": true},
+    "invite_links": {"invite_card": true, "invite_party_title": "Hackney Loft Afters", "invite_accept_button": true, "accept_navigates_to": "/party/party_e19aaf55c089", "bad_code_invite_expired": true},
+    "host_vs_nonhost_party_detail": {"host_share_invite_button": true, "host_invite_card": true, "host_party_safety_button_absent": true, "host_copy_toast": "Invite link copied — paste it anywhere", "nonhost_party_safety_button": true, "nonhost_share_invite_absent": true, "nonhost_invite_card_absent": true}
+  },
+  "test_report_links": ["/app/backend/tests/test_new_features.py", "/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml", "/app/test_reports/pytest/pytest_regression.xml"],
+  "action_items": [
+    "No functional issues found — all 4 new features (Party Map, Profile Photos, Invite Links, Safety) are fully working end-to-end. No main-agent action required.",
+    "Carried over from previous iterations (non-blocking): react-native-web still logs 'textShadow*' and 'shadow*' style-prop deprecation warnings; migrate to 'textShadow' / 'boxShadow' shorthands at your convenience."
+  ],
+  "critical_code_review_comments": [
+    "server.py party_view (lines 541-543) correctly returns lat/lng as numbers and distance_km=null when caller omits lat/lng, round-1dp when provided — verified by TestPartyMap x3.",
+    "POST /api/me/photo (409-435) correctly whitelists image/jpeg|png|webp|heic (rejects text/plain with 400), persists to /api/files/<id>, and GET /api/files/<id> (438-450) streams the exact bytes back with the stored content_type and Cache-Control immutable — verified by uploading a hand-crafted 1x1 red PNG and byte-matching the response.",
+    "Invite flow (644-678) correctly 403s non-host /invite requests, 404s bad codes, and the accept path uses do_join(..., invited=True) which bypasses the free 3-joins/day limit (625-629). Also the invite card copy-link path on web works via navigator.clipboard — toast 'Invite link copied — paste it anywhere' confirmed.",
+    "Safety: blocked_ids() (461-463) is a bidirectional set that correctly feeds both /parties host_id $nin (574-576) and /discover excluded (696), so blocked hosts' parties and blocked users both disappear from the feed/discover. do_join (623-624) also 403s if host blocks the joiner. Report Pydantic Literal (454-458) returns 422 for invalid reason as required.",
+    "Frontend invite-accept-button label is 'Open the party' (not 'Accept') but the testID is correct and tapping it correctly accepts via POST /api/invites/<code>/accept and navigates to /party/<id> with the host-view toast — intentional UX wording; no issue."
+  ],
+  "updated_files": ["/app/backend/tests/test_new_features.py (new)"],
+  "success_rate": {"backend": "100% (8/8 new feature tests + 25/25 regression non-skipped)", "frontend": "100% (5/5 acceptance checks)"},
+  "seed_data_creation": "Test@afterparty.app profile picture was set to a 1x1 red PNG as part of TestPhotoUpload — this is why the Profile avatar now shows a red circle. Also 1 report (reason=spam, target=zara) was filed by test@ user; block was created and then removed so /me/blocks is empty at the end. Fresh test_* users were registered for invite accept and other isolated tests.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All four new features are fully verified at both the API and UI layer. test@afterparty.app's profile picture is now a 1x1 red PNG from TestPhotoUpload — if a future iteration expects the original Unsplash picture, re-upload via POST /api/me/photo or reset via the seed. test@ user is now attending party_e19aaf55c089 (Hackney Loft Afters) via invite accept done during the UI flow — leave via POST /api/parties/<id>/leave if a test needs a non-attending state. Pre-existing non-blocking react-native-web textShadow*/shadow* deprecation warnings persist in console (not functional). Chat tests (3) in backend_test.py skip under xdist because fresh_user match_id doesn't cross workers — this is the historical status, not a regression."
+}

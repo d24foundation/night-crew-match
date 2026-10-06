@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
+import { resolveUri } from "@/src/api";
 
 export type IconName = React.ComponentProps<typeof Ionicons>["name"];
 export { Ionicons };
@@ -56,7 +57,7 @@ export function Chip({ label, selected, onPress, testID, icon }: { label: string
 export function Avatar({ uri, name, size = 40, ring }: { uri?: string | null; name?: string; size?: number; ring?: boolean }) {
   const { colors } = useTheme();
   const st = { width: size, height: size, borderRadius: size / 2, borderWidth: ring ? 2 : 0, borderColor: colors.surface };
-  if (uri) return <Image source={{ uri }} style={st} contentFit="cover" transition={200} />;
+  if (uri) return <Image source={{ uri: resolveUri(uri)! }} style={st} contentFit="cover" transition={200} />;
   return (
     <View style={[st, { backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" }]}>
       <Text style={{ color: colors.onBrandTertiary, fontWeight: "800", fontSize: size * 0.4 }}>{(name ?? "?").charAt(0).toUpperCase()}</Text>

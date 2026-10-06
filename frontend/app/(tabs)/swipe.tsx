@@ -9,9 +9,10 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { interpolate, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming, ZoomIn } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
 
-import { api, ApiError, User } from "@/src/api";
+import { api, ApiError, resolveUri, User } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { usesNativeTabs } from "@/src/navigation";
+import { SafetySheet } from "@/src/safety";
 import { Avatar, Btn, IconBtn, Ionicons, TierBadge, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -26,6 +27,7 @@ export default function Swipe() {
   const q = useQuery({ queryKey: ["discover"], queryFn: () => api<User[]>("/discover") });
   const [idx, setIdx] = useState(0);
   const [match, setMatch] = useState<{ match_id: string; user: User } | null>(null);
+  const [safety, setSafety] = useState<{ user_id: string; name: string } | null>(null);
   const people = q.data ?? [];
   const current = people[idx];
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
@@ -57,7 +59,10 @@ export default function Swipe() {
     <View style={[s.root, { paddingTop: insets.top + 8 }]}>
       <View style={s.header}>
         <Text style={s.title}>Who's out tonight</Text>
-        <IconBtn testID="boost-button" icon={user?.boosted ? "rocket" : "rocket-outline"} onPress={boost} />
+        <View style={{ flexDirection: "row", gap: 8 }}>
+          {current && <IconBtn testID="swipe-safety-button" icon="flag-outline" onPress={() => setSafety({ user_id: current.user_id, name: current.name })} />}
+          <IconBtn testID="boost-button" icon={user?.boosted ? "rocket" : "rocket-outline"} onPress={boost} />
+        </View>
       </View>
       <View style={s.deck}>
         {q.isLoading ? <ActivityIndicator color={colors.brandPrimary} /> : !current ? (
@@ -96,6 +101,7 @@ export default function Swipe() {
           </Animated.View>
         </View>
       </Modal>
+      <SafetySheet target={safety} onClose={() => setSafety(null)} onBlocked={() => setIdx((i) => i + 1)} />
     </View>
   );
 }
@@ -148,7 +154,7 @@ function Card({ u, behind }: { u: User; behind?: boolean }) {
   const { colors } = useTheme();
   return (
     <View style={[s.card, behind && s.cardAbs, behind && { transform: [{ scale: 0.95 }], opacity: 0.6 }]}>
-      {u.picture ? <Image source={{ uri: u.picture }} style={s.photo} contentFit="cover" /> : <View style={[s.photo, { backgroundColor: colors.brandTertiary }]} />}
+      {u.picture ? <Image source={{ uri: resolveUri(u.picture)! }} style={s.photo} contentFit="cover" /> : <View style={[s.photo, { backgroundColor: colors.brandTertiary }]} />}
       <LinearGradient colors={["transparent", colors.surface]} locations={[0.45, 1]} style={s.photo} />
       {u.boosted && <View style={s.boostTag}><Ionicons name="rocket" size={12} color={colors.onGold} /><Text style={s.boostText}>BOOSTED</Text></View>}
       <View style={s.info}>

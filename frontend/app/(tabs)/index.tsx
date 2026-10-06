@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
@@ -7,9 +7,11 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown } from "react-native-reanimated";
 
-import { api, CITIES, Party } from "@/src/api";
+import { api, CITIES, fmtDistance, Party } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { useLocation } from "@/src/location";
 import { usesNativeTabs } from "@/src/navigation";
+import { PartyMap } from "@/src/party-map";
 import { Avatar, Btn, Chip, formatStart, Ionicons, TierBadge, useToast, Wordmark } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -20,25 +22,45 @@ export default function Parties() {
   const router = useRouter();
   const { user } = useAuth();
   const [city, setCity] = useState(user?.city ?? "London");
-  const q = useQuery({ queryKey: ["parties", city], queryFn: () => api<Party[]>(`/parties?city=${encodeURIComponent(city)}`) });
+  const [view, setView] = useState<"list" | "map">("list");
+  const loc = useLocation();
+  const geo = loc.coords ? `&lat=${loc.coords.lat}&lng=${loc.coords.lng}` : "";
+  const q = useQuery({ queryKey: ["parties", city, geo], queryFn: () => api<Party[]>(`/parties?city=${encodeURIComponent(city)}${geo}`) });
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
+  const parties = useMemo(() => {
+    const list = q.data ?? [];
+    return loc.coords ? [...list].sort((a, b) => (a.distance_km ?? 1e9) - (b.distance_km ?? 1e9)) : list;
+  }, [q.data, loc.coords]);
+
+  const openMap = () => { setView("map"); loc.locate(); };
 
   return (
     <View style={s.root}>
       <View style={[s.header, { paddingTop: insets.top + 8 }]}>
         <View style={s.titleRow}>
-          <View style={{ gap: 4 }}>
-            <Wordmark size={32} testID="feed-logo" />
+          <View style={{ gap: 4, flexShrink: 1 }}>
+            <Wordmark size={24} testID="feed-logo" />
             <Text style={s.sub} testID="feed-subtitle">{q.data?.length ?? 0} afters near {city === "All" ? "you" : city}</Text>
           </View>
-          {user?.tier === "free" && (
-            <Pressable testID="header-premium-button" onPress={() => router.push("/premium")} style={s.goPro}>
-              <Ionicons name="flash" size={14} color={colors.onGold} />
-              <Text style={s.goProText}>GO PRO</Text>
-            </Pressable>
-          )}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={s.seg}>
+              <Pressable testID="view-list-button" onPress={() => setView("list")} style={[s.segBtn, view === "list" && s.segOn]}>
+                <Ionicons name="list" size={16} color={view === "list" ? colors.onBrandPrimary : colors.onSurfaceTertiary} />
+              </Pressable>
+              <Pressable testID="view-map-button" onPress={openMap} style={[s.segBtn, view === "map" && s.segOn]}>
+                <Ionicons name="map" size={16} color={view === "map" ? colors.onBrandPrimary : colors.onSurfaceTertiary} />
+              </Pressable>
+            </View>
+            {user?.tier === "free" && (
+              <Pressable testID="header-premium-button" onPress={() => router.push("/premium")} style={s.goPro}>
+                <Ionicons name="flash" size={14} color={colors.onGold} />
+                <Text style={s.goProText}>GO PRO</Text>
+              </Pressable>
+            )}
+          </View>
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipContent}>
+          {!loc.coords && <Chip testID="near-me-chip" label="Near me" icon="navigate" onPress={loc.locate} />}
           {["All", ...CITIES].map((c) => (
             <Chip key={c} testID={`city-chip-${c}`} label={c} selected={city === c} onPress={() => setCity(c)} />
           ))}
@@ -47,10 +69,12 @@ export default function Parties() {
 
       {q.isLoading ? (
         <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 48 }} />
+      ) : view === "map" ? (
+        <PartyMap parties={parties} city={city} me={loc.coords} onOpen={(p) => router.push(`/party/${p.party_id}`)} />
       ) : (
         <FlatList
           testID="party-list"
-          data={q.data ?? []}
+          data={parties}
           keyExtractor={(p) => p.party_id}
           contentContainerStyle={{ padding: spacing.md, paddingBottom: bottomChrome + 96, gap: spacing.md }}
           refreshControl={<RefreshControl refreshing={q.isRefetching} onRefresh={q.refetch} tintColor={colors.brandPrimary} />}
@@ -71,6 +95,7 @@ export default function Parties() {
         <Ionicons name="add" size={22} color={colors.onBrandSecondary} />
         <Text style={s.fabText}>Host afters</Text>
       </Pressable>
+      {loc.ui}
     </View>
   );
 }
@@ -90,7 +115,7 @@ function PartyCard({ p, index, onPress }: { p: Party; index: number; onPress: ()
         </View>
         <View style={s.coverBottom}>
           <Text style={s.cardTitle} numberOfLines={1}>{p.title}</Text>
-          <Text style={s.cardArea}><Ionicons name="location" size={12} color={colors.onSurfaceTertiary} /> {p.area}, {p.city}</Text>
+          <Text style={s.cardArea}><Ionicons name="location" size={12} color={colors.onSurfaceTertiary} /> {p.area}, {p.city}{p.distance_km != null ? ` · ${fmtDistance(p.distance_km)} away` : ""}</Text>
         </View>
         <View style={s.cardBody}>
           <View style={s.hostRow}>
@@ -175,9 +200,12 @@ const useStyles = makeStyles((c) => ({
   header: { backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.divider },
   titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: spacing.md },
   logo: { color: c.brandPrimary, fontSize: 34, fontWeight: "900", letterSpacing: -1.5 },
-  sub: { color: c.onSurfaceTertiary, fontWeight: "600", marginTop: 2 },
+  sub: { color: c.onSurfaceTertiary, fontWeight: "600", marginTop: 2, fontSize: 13 },
   goPro: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: c.gold, paddingHorizontal: 12, height: 32, borderRadius: radius.pill },
   goProText: { color: c.onGold, fontWeight: "900", fontSize: 12 },
+  seg: { flexDirection: "row", backgroundColor: c.surfaceTertiary, borderRadius: radius.pill, padding: 3, borderWidth: 1, borderColor: c.border },
+  segBtn: { width: 36, height: 28, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
+  segOn: { backgroundColor: c.brandPrimary },
   chipRow: { height: 56, flexGrow: 0 },
   chipContent: { paddingHorizontal: spacing.md, gap: spacing.sm, alignItems: "center" },
   card: { backgroundColor: c.surfaceSecondary, borderRadius: radius.lg, overflow: "hidden", borderWidth: 1, borderColor: c.border },

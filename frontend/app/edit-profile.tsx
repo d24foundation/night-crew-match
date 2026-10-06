@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, CITIES, User, VIBES } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Btn, Chip, IconBtn, useToast } from "@/src/ui";
+import { ChangePhotoBadge, usePhotoPicker } from "@/src/photo";
+import { Avatar, Btn, Chip, IconBtn, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 export default function EditProfile() {
@@ -22,6 +23,7 @@ export default function EditProfile() {
   const [city, setCity] = useState(user?.city ?? "London");
   const [vibes, setVibes] = useState<string[]>(user?.vibes ?? []);
   const [busy, setBusy] = useState(false);
+  const photo = usePhotoPicker(setUser);
 
   const save = async () => {
     const a = parseInt(age, 10);
@@ -43,6 +45,10 @@ export default function EditProfile() {
         <View style={{ width: 44 }} />
       </View>
       <KeyboardAwareScrollView bottomOffset={24} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: spacing.md, gap: spacing.md, paddingBottom: insets.bottom + 24 }}>
+        <Pressable testID="edit-avatar" onPress={photo.open} style={{ alignItems: "center" }}>
+          <Avatar uri={user?.picture} name={user?.name} size={104} />
+          <ChangePhotoBadge onPress={photo.open} />
+        </Pressable>
         <Text style={s.label}>Name</Text>
         <TextInput testID="edit-name-input" style={s.input} value={name} onChangeText={setName} placeholderTextColor={colors.muted} maxLength={40} />
         <Text style={s.label}>Age</Text>
@@ -59,6 +65,7 @@ export default function EditProfile() {
         </View>
         <Btn testID="save-profile-button" title="Save" loading={busy} onPress={save} />
       </KeyboardAwareScrollView>
+      {photo.ui}
     </View>
   );
 }

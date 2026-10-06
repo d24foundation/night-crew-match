@@ -10,14 +10,25 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.emergent.nightcrewmatch.k5qoxm",
-      "usesAppleSignIn": true
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Show how far tonight's after-parties are from you",
+        "NSCameraUsageDescription": "Take a profile photo so matches know it's really you",
+        "NSPhotoLibraryUsageDescription": "Pick a profile photo from your library"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "com.emergent.nightcrewmatch.k5qoxm"
+      "package": "com.emergent.nightcrewmatch.k5qoxm",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -42,7 +53,18 @@
       "expo-apple-authentication",
       "expo-notifications",
       "expo-status-bar",
-      "@react-native-vector-icons/ionicons"
+      "@react-native-vector-icons/ionicons",
+      [
+        "expo-location",
+        { "locationWhenInUsePermission": "Show how far tonight's after-parties are from you" }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Pick a profile photo from your library",
+          "cameraPermission": "Take a profile photo so matches know it's really you"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
