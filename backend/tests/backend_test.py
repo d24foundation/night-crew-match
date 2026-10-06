@@ -108,8 +108,11 @@ class TestParties:
 
     def test_address_hidden_for_non_attendee(self, http, existing_user):
         r = http.get(f"{API}/parties?city=London", headers=_hdr(existing_user["token"]))
-        p = r.json()[0]
-        d = http.get(f"{API}/parties/{p['party_id']}", headers=_hdr(existing_user["token"])).json()
+        details = [http.get(f"{API}/parties/{p['party_id']}", headers=_hdr(existing_user["token"])).json() for p in r.json()]
+        outsiders = [d for d in details if not d["is_host"] and not d["attending"]]
+        if not outsiders:
+            pytest.skip("test user is in every London party")
+        d = outsiders[0]
         assert d["address"] is None
         # non-super viewing someone else's party → cannot see attendees
         if not d["is_host"]:

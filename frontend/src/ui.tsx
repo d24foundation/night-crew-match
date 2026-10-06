@@ -1,5 +1,5 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, PressableProps, Text, View, ViewStyle, StyleProp } from "react-native";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, LayoutChangeEvent, Platform, Pressable, PressableProps, Text, View, ViewStyle, StyleProp } from "react-native";
 import { Image } from "expo-image";
 import Ionicons from "@react-native-vector-icons/ionicons";
 import Animated, { FadeInUp, FadeOutUp, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
@@ -77,15 +77,24 @@ export function TierBadge({ tier, testID }: { tier: string; testID?: string }) {
 }
 
 // ---------- Wordmark (viral neon logo) ----------
-export function Wordmark({ size = 40, stacked, testID }: { size?: number; stacked?: boolean; testID?: string }) {
+export function Wordmark({ size = 40, stacked, fillWidth, testID }: { size?: number; stacked?: boolean; fillWidth?: number; testID?: string }) {
   const { colors } = useTheme();
+  // fillWidth: measure the widest row ("PARTY" + dot) at a probe size on the actual device font, then scale to span exactly fillWidth.
+  const PROBE = 40;
+  const [scale, setScale] = useState<number | null>(null);
+  useEffect(() => { setScale(null); }, [fillWidth]);
+  if (fillWidth) size = scale ? PROBE * scale : PROBE;
   const base = { fontSize: size, fontWeight: "900" as const, fontStyle: "italic" as const, letterSpacing: -size * 0.04, lineHeight: size * 1.02, includeFontPadding: false };
   const glow = (c: string) => ({ textShadowColor: c, textShadowOffset: { width: 0, height: 0 }, textShadowRadius: size * 0.35 });
+  const onRowLayout = fillWidth && !scale
+    ? (e: LayoutChangeEvent) => { const w = e.nativeEvent.layout.width; if (w > 0) setScale(fillWidth / w); }
+    : undefined;
+  const oneLine = Platform.OS === "web" ? undefined : 1;
   return (
-    <View testID={testID} style={{ flexDirection: stacked ? "column" : "row", alignItems: stacked ? "flex-start" : "baseline", gap: stacked ? 0 : size * 0.18 }}>
-      <Text style={[base, { color: colors.onSurface }, glow(colors.brandPrimary)]}>AFTER</Text>
-      <View style={{ flexDirection: "row", alignItems: "center" }}>
-        <Text style={[base, { color: colors.brandSecondary }, glow(colors.brandSecondary)]}>PARTY</Text>
+    <View testID={testID} style={{ flexDirection: stacked ? "column" : "row", alignItems: stacked ? "flex-start" : "baseline", gap: stacked ? 0 : size * 0.18, opacity: fillWidth && !scale ? 0 : 1 }}>
+      <Text numberOfLines={oneLine} style={[base, { color: colors.onSurface }, glow(colors.brandPrimary)]}>AFTER</Text>
+      <View onLayout={onRowLayout} style={{ flexDirection: "row", alignItems: "center", alignSelf: "flex-start" }}>
+        <Text numberOfLines={oneLine} style={[base, { color: colors.brandSecondary }, glow(colors.brandSecondary)]}>PARTY</Text>
         <View style={{ width: size * 0.22, height: size * 0.22, borderRadius: size, backgroundColor: colors.brandPrimary, marginLeft: size * 0.08, alignSelf: "flex-end", marginBottom: size * 0.16 }} />
       </View>
     </View>

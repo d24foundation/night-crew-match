@@ -29,6 +29,10 @@ Mobile app that connects people for after-parties when clubs close (or during th
 - Apple sign-in (/api/auth/apple, JWKS-verified, iOS build only)
 - Emergent push notifications: /api/register-push; pushes on new match, chat message, someone joins your party; tap opens the right screen; in-app permission sheet with an Open Settings nudge. googleServicesFile still to be added once the user uploads google-services.json
 - New neon wordmark: italic "AFTER" (white, pink glow) + "PARTY" (lime glow) + pink dot
+- Expo Go safety: expo-notifications is only loaded in real builds (src/push-env.ts); Expo Go/web run without push so the app never crashes at startup
+- Pricing verified in GBP everywhere: backend PLANS (3.99/7.99, currency "gbp"), Stripe checkout, RevenueCat products, paywall UI
+- Login wordmark scales with screen width (85% of content width, shrink-to-fit on native) so it never overflows or leaves a gap
+- Paywall plan cards: header wraps (name + pill) with a non-shrinking price so £3.99/£7.99 are always visible on narrow phones
 
 ## Backlog
 - P0: Push notifications (need google-services.json)

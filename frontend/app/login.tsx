@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Platform, Pressable, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { Image } from "expo-image";
@@ -42,6 +42,7 @@ export default function Login() {
   const s = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const { login, register, googleLogin, appleLogin } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
@@ -90,7 +91,7 @@ export default function Login() {
       <KeyboardAwareScrollView bottomOffset={24} contentContainerStyle={[s.content, { paddingTop: insets.top + 120, paddingBottom: insets.bottom + 24 }]} keyboardShouldPersistTaps="handled">
         <Animated.View entering={FadeInDown.duration(500)}>
           <View style={s.tag}><Ionicons name="location" size={12} color={colors.onBrandSecondary} /><Text style={s.tagText}>LONDON · WORLDWIDE</Text></View>
-          <View style={{ marginTop: spacing.md }}><Wordmark size={78} stacked testID="app-logo" /></View>
+          <View style={{ marginTop: spacing.md }}><Wordmark fillWidth={Math.round((width - spacing.lg * 2) * 0.8)} stacked testID="app-logo" /></View>
           <RotatingHook />
         </Animated.View>
 

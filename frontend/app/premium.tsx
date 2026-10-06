@@ -101,10 +101,11 @@ export default function Premium() {
               <LinearGradient colors={on ? (p.key === "super" ? [colors.gold, colors.brandPrimary] : [colors.brandPrimary, colors.brandTertiary]) : [colors.surfaceSecondary, colors.surfaceSecondary]}
                 start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[s.plan, !on && { borderColor: colors.border, borderWidth: 1 }]}>
                 <View style={s.planHead}>
-                  <Text style={s.planName}>{p.name}</Text>
-                  {p.key === "super" && <View style={s.pop}><Text style={s.popText}>MOST VIRAL</Text></View>}
-                  <View style={{ flex: 1 }} />
-                  <Text style={s.price}>{isTestStore ? p.price : rcPrice ?? p.price}<Text style={s.per}>/mo</Text></Text>
+                  <View style={s.planLeft}>
+                    <Text style={s.planName} numberOfLines={2}>{p.name}</Text>
+                    {p.key === "super" && <View style={s.pop}><Text style={s.popText}>MOST VIRAL</Text></View>}
+                  </View>
+                  <Text style={s.price} testID={`plan-${p.key}-price`}>{isTestStore ? p.price : rcPrice ?? p.price}<Text style={s.per}>/mo</Text></Text>
                 </View>
                 {p.perks.map((perk) => (
                   <View key={perk} style={s.perk}><Ionicons name="checkmark" size={16} color={colors.onSurface} /><Text style={s.perkText}>{perk}</Text></View>
@@ -152,10 +153,11 @@ const useStyles = makeStyles((c) => ({
   activeText: { color: c.onBrandSecondary, fontWeight: "800" },
   plan: { borderRadius: radius.lg, padding: spacing.md, gap: 8 },
   planHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
-  planName: { color: c.onSurface, fontSize: 20, fontWeight: "900" },
+  planLeft: { flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  planName: { color: c.onSurface, fontSize: 20, fontWeight: "900", flexShrink: 1 },
   pop: { backgroundColor: c.surface, paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.pill },
   popText: { color: c.gold, fontSize: 10, fontWeight: "900" },
-  price: { color: c.onSurface, fontSize: 24, fontWeight: "900" },
+  price: { color: c.onSurface, fontSize: 24, fontWeight: "900", flexShrink: 0 },
   per: { fontSize: 13, fontWeight: "600" },
   perk: { flexDirection: "row", gap: 8, alignItems: "center" },
   perkText: { color: c.onSurface, fontWeight: "600" },

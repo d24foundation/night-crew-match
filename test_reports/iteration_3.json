@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend-only verification of the new measurement-based Wordmark fix (src/ui.tsx). At viewports 360x780, 390x844, and 430x932: testID='app-logo' renders with opacity=1 (measurement completed, not stuck at 0), AFTER and PARTY each on a single line, pink dot visible to the right of PARTY, and the PARTY-row width equals the target fillWidth = round((viewport-48)*0.8) within 0.3px (well under the ±10px tolerance). Zero horizontal overflow at every tested viewport (body.scrollWidth == window.innerWidth). Resize from 390→360 re-measures correctly (party row 273.7→249.7, matching new expected 250). Login with test@afterparty.app / Test1234! lands on the feed with 'London' visible and the small feed-header Wordmark (no fillWidth prop) renders normally at its default size. No console errors; only the pre-existing benign react-native-web 'textShadow*' deprecation warnings.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "measurements": {
+    "viewport_390x844": {"app_logo_opacity": "1", "logo_x": 24, "party_row_width": 273.70, "expected_fillWidth": 274, "diff_px": -0.30, "after_width": 252.45, "party_width": 249.55, "dot_visible": true, "body_scrollWidth": 390, "overflow": false},
+    "viewport_360x780": {"app_logo_opacity": "1", "logo_x": 24, "party_row_width": 249.72, "expected_fillWidth": 250, "diff_px": -0.28, "after_width": 230.33, "party_width": 227.67, "dot_visible": true, "body_scrollWidth": 360, "overflow": false},
+    "viewport_430x932": {"app_logo_opacity": "1", "logo_x": 24, "party_row_width": 305.72, "expected_fillWidth": 306, "diff_px": -0.28, "after_width": 281.98, "party_width": 278.73, "dot_visible": true, "body_scrollWidth": 430, "overflow": false},
+    "resize_390_to_360": {"party_row_before": 273.70, "party_row_after": 249.72, "expected_after": 250, "opacity_after_resize": "1"},
+    "login_flow": {"credentials": "test@afterparty.app / Test1234!", "london_visible_on_feed": true, "feed_header_wordmark_renders": true, "feed_after_width": 100.27}
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional (non-blocking, carried over from iteration_2): react-native-web warns 'textShadow*' style props are deprecated — use the new 'textShadow' shorthand. Only noise, no functional impact."
+  ],
+  "critical_code_review_comments": [
+    "Wordmark now correctly uses onLayout on the PARTY-row View to measure actual rendered width at a PROBE=40 font size, then derives scale = fillWidth/w. Observed outputs match expected fillWidth within <0.5px across all three viewports — tighter than the previous fixed-ratio approach.",
+    "useEffect([fillWidth]) resetting scale to null correctly re-triggers remeasurement on viewport resize; verified by shrinking 390→360 and observing partyRow width drop from 273.7 to 249.7 while opacity stays at 1 after the brief probe.",
+    "Opacity gate (0 until first measurement, then 1) prevents the flash of the oversized probe layout. On web the gate reliably reaches 1 before user perception; no stuck-at-0 observed on reload or resize."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Measurement-based Wordmark verified at 360/390/430 viewports and on live resize. PARTY-row width matches fillWidth=(viewport-48)*0.8 within 0.3px, no body overflow, opacity reaches 1, pink dot renders. Login flow unaffected; feed-header Wordmark (no fillWidth) renders at default size. Only non-blocking react-native-web textShadow deprecation warnings in console."
+}

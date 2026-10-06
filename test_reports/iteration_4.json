@@ -1,0 +1,33 @@
+{
+  "summary": "Frontend-only verification of the Super Premium (£7.99) price-visibility fix on /premium (fix in /app/frontend/app/premium.tsx: planHead with flex:1 wrapping planLeft (name + MOST VIRAL pill) and non-shrinking price Text with testIDs plan-premium-price / plan-super-price). All 5 requested checks PASS: (1) At viewports 320x680, 360x780 and 390x844 both plan-super-price (contains '£7.99') and plan-premium-price (contains '£3.99') are visible and their bounding-box right edge is inside the respective card and inside the viewport. (2) On the super card, 'Super Premium' name and 'MOST VIRAL' pill are both visible with zero horizontal overlap with the price (at 320/360 the pill wraps to its own line below the name, at 390 both fit inline next to the name — all without touching the price). (3) Tapping plan-premium then plan-super switches selection and the pay-with-card-button label updates from 'Pay £7.99 with card' → 'Pay £3.99 with card' → 'Pay £7.99 with card'. (4) Tapping pay-with-card-button with super selected redirects to checkout.stripe.com (session cs_test_a1z55HU7...) — redirect confirmed, payment not completed. (5) Zero console errors on the premium screen (only pre-existing benign react-native-web 'textShadow*' / 'shadow*' deprecation warnings, carried over from prior iterations).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "measurements": {
+    "viewport_390x844": {"super_price_text": "£7.99/mo", "super_price_right": 358, "super_card_right": 374, "price_inside_card": true, "price_inside_viewport": true, "prem_price_text": "£3.99/mo", "prem_price_inside_card": true, "super_name_right": 179.83, "pop_x": 195.83, "super_price_x": 274.81, "name_price_no_overlap": true, "pop_price_no_overlap": true, "pop_wraps_below_name": false},
+    "viewport_360x780": {"super_price_text": "£7.99/mo", "super_price_right": 328, "super_card_right": 344, "price_inside_card": true, "price_inside_viewport": true, "prem_price_text": "£3.99/mo", "prem_price_inside_card": true, "super_name_right": 179.83, "pop_x": 40, "super_price_x": 244.81, "name_price_no_overlap": true, "pop_price_no_overlap": true, "pop_wraps_below_name": true},
+    "viewport_320x680": {"super_price_text": "£7.99/mo", "super_price_right": 288, "super_card_right": 304, "price_inside_card": true, "price_inside_viewport": true, "prem_price_text": "£3.99/mo", "prem_price_inside_card": true, "super_name_right": 179.83, "pop_x": 40, "super_price_x": 204.81, "name_price_no_overlap": true, "pop_price_no_overlap": true, "pop_wraps_below_name": true},
+    "selection_flow": {"initial_pay_btn": "Pay £7.99 with card", "after_tap_premium": "Pay £3.99 with card", "after_tap_super": "Pay £7.99 with card"},
+    "stripe_redirect": {"url_contains_checkout_stripe_com": true, "session_prefix": "cs_test_a1z55HU7nyguIg31lhyzVzrMnJSdKI4MBzxYMHLECkgG5ERQKKjntlrjwk"},
+    "console_errors": 0
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional (non-blocking, carried over from previous iterations): react-native-web warns 'textShadow*' and 'shadow*' style props are deprecated — migrate to 'textShadow' / 'boxShadow' shorthands. No functional impact."
+  ],
+  "critical_code_review_comments": [
+    "planHead flexDirection:row + planLeft {flex:1, flexWrap:'wrap'} + price {flexShrink:0} is the correct pattern — the price keeps its natural width (83px for '£7.99/mo') and the left column takes the remaining space, with 'Super Premium' + 'MOST VIRAL' wrapping to two lines on narrow viewports (320/360) instead of being pushed off-card.",
+    "testIDs plan-premium-price and plan-super-price are correctly plumbed through to the Text component, enabling the observed bounding-box-based regression test. Pay-with-card-button title also stays in sync with selected plan via PLANS.find((x)=>x.key===plan).price.",
+    "Default selected plan is 'super' (line 30: useState<Plan>('super')) which matches the pricing nudge; verified by initial pay button reading 'Pay £7.99 with card'."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% (5/5 acceptance checks pass)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Premium paywall price-visibility fix fully verified across 320/360/390 widths. On 390 the Super header fits inline (name + pill + price on one row); on 360 and 320 the MOST VIRAL pill wraps to a second line under the name (both pill and name still fully inside the card and never overlap the right-aligned £7.99/mo price). Stripe checkout redirect works end-to-end from the preview URL using test@afterparty.app. Only non-blocking react-native-web textShadow*/shadow* deprecation warnings remain in console."
+}

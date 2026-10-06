@@ -2,7 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, LogBox, Platform, View } from "react-native";
-import * as Notifications from "expo-notifications";
+import { Notifications, pushEnabled } from "@/src/push-env";
 import { PushManager } from "@/src/push";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -16,7 +16,7 @@ import { colors } from "@/src/theme";
 
 LogBox.ignoreAllLogs(true);
 
-if (Platform.OS !== "web") {
+if (Notifications) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowAlert: true,
@@ -27,7 +27,7 @@ if (Platform.OS !== "web") {
     }),
   });
 }
-if (Platform.OS === "android") {
+if (Notifications && Platform.OS === "android") {
   Notifications.setNotificationChannelAsync("default", {
     name: "Default",
     importance: Notifications.AndroidImportance.MAX,
@@ -53,7 +53,7 @@ function Gate() {
   }
   return (
     <>
-    {user && <PushManager />}
+    {user && pushEnabled && <PushManager />}
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
       <Stack.Protected guard={!user}>
         <Stack.Screen name="login" />

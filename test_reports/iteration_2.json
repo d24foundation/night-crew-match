@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend-only verification of the login wordmark fit fix. Verified at viewports 390x844, 360x780, and 430x932 that the testID='app-logo' bounding box starts at x=24 (left pad spacing.lg) and has width ≈ (viewport-48)*0.85 with zero horizontal overflow (body.scrollWidth equals viewport width). Both AFTER and PARTY render on single lines in stacked layout, pink dot visible after PARTY. Login with test@afterparty.app / Test1234! succeeded and the party feed shows 'London'. No console errors observed; only benign react-native-web deprecation warnings for 'textShadow*' and 'shadow*' style props.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "measurements": {
+    "viewport_390x844": {"app_logo": {"x": 24, "width": 290.6875, "height": 173.4}, "expected_fillWidth": 290.7, "body_scrollWidth": 390, "overflow": false, "after_width": 266.31, "party_width": 263.25},
+    "viewport_360x780": {"app_logo": {"x": 24, "width": 265.1875, "height": 159.1}, "expected_fillWidth": 265.2, "body_scrollWidth": 360, "overflow": false, "after_width": 244.38, "party_width": 241.56},
+    "viewport_430x932": {"app_logo": {"x": 24, "width": 324.6875, "height": 193.8}, "expected_fillWidth": 324.7, "body_scrollWidth": 430, "overflow": false, "after_width": 297.64, "party_width": 294.22},
+    "login_flow": {"credentials": "test@afterparty.app / Test1234!", "london_visible_on_feed": true}
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional (non-blocking): react-native-web prints deprecation warnings for 'textShadow*' and 'shadow*' style props used in Wordmark glow and other elements. Consider migrating to the new 'textShadow' / 'boxShadow' shorthand to silence console noise on web."
+  ],
+  "critical_code_review_comments": [
+    "Wordmark fit math is correct and matches observed boxes (fillWidth ≈ (width-48)*0.85, font ≈ fillWidth/3.4). AFTER/PARTY are rendered as separate <Text> rows (stacked), so adjustsFontSizeToFit on native will fit each word independently — which is what you want for narrow devices.",
+    "On web the 'fit' props (numberOfLines/adjustsFontSizeToFit) are intentionally not applied; current widths comfortably fit within the computed fillWidth at tested viewports, so no clipping observed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not retested per request)", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login wordmark fit verified via Playwright at 360/390/430 viewports: left=24, width=(viewport-48)*0.85, no body overflow; both AFTER and PARTY on single lines; dot visible. Login to feed works. Only non-blocking RN-web deprecation warnings in console."
+}

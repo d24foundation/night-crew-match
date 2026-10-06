@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Modal, Platform, Text, View } from "react-native";
-import * as Notifications from "expo-notifications";
 import * as Linking from "expo-linking";
+import { Notifications as N } from "@/src/push-env";
 import { useRouter } from "expo-router";
 
 import { api } from "@/src/api";
@@ -12,6 +12,9 @@ import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 const NUDGE_KEY = "pushNudgeAt";
 const ASKED_KEY = "pushAskedAt";
+
+// Non-null inside PushManager (it only mounts when push is enabled); see Gate in app/_layout.tsx.
+const Notifications = N!;
 
 async function registerToken(userId: string) {
   const tokenResp = await Notifications.getDevicePushTokenAsync();
@@ -27,7 +30,6 @@ export function PushManager() {
   const [sheet, setSheet] = useState<"ask" | "nudge" | null>(null);
 
   useEffect(() => {
-    if (Platform.OS === "web") return;
     const go = (data: any) => {
       const url = data?.deeplink || data?.action_url;
       if (!url) return;
@@ -40,7 +42,7 @@ export function PushManager() {
   }, [router]);
 
   useEffect(() => {
-    if (Platform.OS === "web" || !user) return;
+    if (!user) return;
     (async () => {
       try {
         const { status, canAskAgain } = await Notifications.getPermissionsAsync();
