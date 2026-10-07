@@ -12,6 +12,7 @@ import { useAuth } from "@/src/auth";
 import { useLocation } from "@/src/location";
 import { usesNativeTabs } from "@/src/navigation";
 import { PartyMap } from "@/src/party-map";
+import { Rating } from "@/src/party-extras";
 import { Avatar, Btn, Chip, formatStart, Ionicons, TierBadge, useToast, Wordmark } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -87,7 +88,7 @@ export default function Parties() {
             </View>
           }
           renderItem={({ item, index }) => <PartyCard p={item} index={index} onPress={() => router.push(`/party/${item.party_id}`)} />}
-          ListHeaderComponent={(q.data?.length ?? 0) > 0 ? <VibeMatcher /> : null}
+          ListHeaderComponent={<><RatePrompt />{(q.data?.length ?? 0) > 0 ? <VibeMatcher /> : null}</>}
         />
       )}
 
@@ -122,6 +123,7 @@ function PartyCard({ p, index, onPress }: { p: Party; index: number; onPress: ()
             <Avatar uri={p.host?.picture} name={p.host?.name} size={28} />
             <Text style={s.hostName}>{p.host?.name}</Text>
             {p.host && <TierBadge tier={p.host.tier} />}
+            <Rating avg={p.host?.rating_avg} count={p.host?.rating_count} />
             <View style={{ flex: 1 }} />
             <View style={s.stack}>
               {p.attendee_pics.slice(0, 3).map((u, i) => (
@@ -142,6 +144,27 @@ function PartyCard({ p, index, onPress }: { p: Party; index: number; onPress: ()
 }
 
 type VibePick = { party_id: string; title: string; cover: string; vibe: string; area: string; reason: string };
+
+// "Rate last night" nudge for afters you went to that have started and aren't rated yet
+function RatePrompt() {
+  const s = useStyles();
+  const { colors } = useTheme();
+  const router = useRouter();
+  const q = useQuery({ queryKey: ["ratings-pending"], queryFn: () => api<Party[]>("/ratings/pending"), staleTime: 60e3 });
+  const p = q.data?.[0];
+  if (!p) return null;
+  return (
+    <Pressable testID="rate-prompt" onPress={() => router.push(`/party/${p.party_id}`)} style={[s.vibeResult, { borderColor: colors.gold, marginBottom: spacing.md }]}>
+      <Image source={{ uri: p.cover }} style={s.vibeImg} contentFit="cover" />
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={[s.vibeLabel, { color: colors.gold }]}>HOW WAS LAST NIGHT?</Text>
+        <Text style={s.vibeTitle} numberOfLines={1}>{p.title}</Text>
+        <Text style={s.vibeReason}>Rate {p.host?.name}'s afters — great hosts rise to the top</Text>
+      </View>
+      <Ionicons name="star" size={22} color={colors.gold} />
+    </Pressable>
+  );
+}
 
 function VibeMatcher() {
   const s = useStyles();

@@ -64,6 +64,10 @@
           "photosPermission": "Pick a profile photo from your library",
           "cameraPermission": "Take a profile photo so matches know it's really you"
         }
+      ],
+      [
+        "expo-camera",
+        { "cameraPermission": "Scan guests' door passes to check them in" }
       ]
     ],
     "experiments": {

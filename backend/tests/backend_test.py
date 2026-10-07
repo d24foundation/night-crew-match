@@ -43,7 +43,7 @@ def fresh_user(http):
     """Register a brand new user to avoid join-limit history."""
     email = f"test_{uuid.uuid4().hex[:10]}@afterparty.app"
     r = http.post(f"{API}/auth/register",
-                  json={"email": email, "password": "Test1234!", "name": "TEST_Fresh"})
+                  json={"email": email, "password": "Test1234!", "name": "TEST_Fresh", "dob": "1998-01-01"})
     assert r.status_code == 200, r.text
     data = r.json()
     return {"email": email, "password": "Test1234!", "token": data["token"], "user": data["user"]}
@@ -67,7 +67,7 @@ def super_user(http):
 class TestAuth:
     def test_register_creates_user(self, http):
         email = f"test_{uuid.uuid4().hex[:8]}@afterparty.app"
-        r = http.post(f"{API}/auth/register", json={"email": email, "password": "Pass1234", "name": "TEST_Reg"})
+        r = http.post(f"{API}/auth/register", json={"email": email, "password": "Pass1234", "name": "TEST_Reg", "dob": "1998-01-01"})
         assert r.status_code == 200
         d = r.json()
         assert d["token"] and d["user"]["email"] == email
@@ -75,7 +75,7 @@ class TestAuth:
 
     def test_register_duplicate_409(self, http, existing_user):
         r = http.post(f"{API}/auth/register",
-                      json={"email": "test@afterparty.app", "password": "Test1234!", "name": "X"})
+                      json={"email": "test@afterparty.app", "password": "Test1234!", "name": "X", "dob": "1998-01-01"})
         assert r.status_code == 409
 
     def test_login_success_returns_token_and_user(self, existing_user):
@@ -159,7 +159,7 @@ class TestParties:
         # create isolated free user and burn 3 joins then expect 402
         email = f"test_{uuid.uuid4().hex[:8]}@afterparty.app"
         tok = http.post(f"{API}/auth/register",
-                        json={"email": email, "password": "Pass1234", "name": "TEST_Limit"}).json()["token"]
+                        json={"email": email, "password": "Pass1234", "name": "TEST_Limit", "dob": "1998-01-01"}).json()["token"]
         parties = http.get(f"{API}/parties?city=London", headers=_hdr(tok)).json()
         joinable = [p for p in parties if not p["is_host"] and not p["attending"]][:4]
         if len(joinable) < 4:
@@ -175,7 +175,7 @@ class TestParties:
         """X-Store-Tier=premium should bypass free join limit."""
         email = f"test_{uuid.uuid4().hex[:8]}@afterparty.app"
         tok = http.post(f"{API}/auth/register",
-                        json={"email": email, "password": "Pass1234", "name": "TEST_Store"}).json()["token"]
+                        json={"email": email, "password": "Pass1234", "name": "TEST_Store", "dob": "1998-01-01"}).json()["token"]
         parties = http.get(f"{API}/parties?city=London", headers=_hdr(tok, "premium")).json()
         joinable = [p for p in parties if not p["is_host"] and not p["attending"]][:4]
         if len(joinable) < 4:

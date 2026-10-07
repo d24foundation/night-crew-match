@@ -75,7 +75,7 @@ def zara(http):
 def fresh_user(http):
     email = f"test_{uuid.uuid4().hex[:10]}@afterparty.app"
     r = http.post(f"{API}/auth/register",
-                  json={"email": email, "password": "Test1234!", "name": "TEST_InviteGuest"})
+                  json={"email": email, "password": "Test1234!", "name": "TEST_InviteGuest", "dob": "1998-01-01"})
     assert r.status_code == 200, r.text
     return r.json()
 

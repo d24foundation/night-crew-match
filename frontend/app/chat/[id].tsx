@@ -1,12 +1,13 @@
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api } from "@/src/api";
+import { api, getApiToken } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { useLiveChat } from "@/src/live-chat";
 import { SafetySheet } from "@/src/safety";
 import { Avatar, IconBtn, Ionicons, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -26,7 +27,17 @@ export default function ChatScreen() {
   const [text, setText] = useState("");
   const [safety, setSafety] = useState<{ user_id: string; name: string } | null>(null);
   const list = useRef<FlatList>(null);
-  const q = useQuery({ queryKey: ["chat", id], queryFn: () => api<Chat>(`/chats/${id}`), refetchInterval: 3000 });
+  const appendMsg = useCallback((m: Msg) => {
+    qc.setQueryData<Chat>(["chat", id], (old) => {
+      if (!old) return old;
+      if (old.messages.some((x) => x.message_id === m.message_id)) return old;
+      return { ...old, messages: [...old.messages, m] };
+    });
+    qc.invalidateQueries({ queryKey: ["chats"] });
+  }, [qc, id]);
+  const live = useLiveChat(id, getApiToken(), appendMsg);
+  // Socket delivers messages instantly; the poll is only a safety net.
+  const q = useQuery({ queryKey: ["chat", id], queryFn: () => api<Chat>(`/chats/${id}`), refetchInterval: live.connected ? 20000 : 3000 });
 
   const onBlocked = () => {
     qc.invalidateQueries({ queryKey: ["chats"] });
@@ -38,10 +49,10 @@ export default function ChatScreen() {
     const t = text.trim();
     if (!t) return;
     setText("");
+    live.sendTyping(false);
     try {
-      await api(`/chats/${id}`, { body: { text: t } });
-      await qc.invalidateQueries({ queryKey: ["chat", id] });
-      qc.invalidateQueries({ queryKey: ["chats"] });
+      const m = await api<Msg>(`/chats/${id}`, { body: { text: t } });
+      appendMsg(m);
     } catch (e) { setText(t); toast((e as Error).message, "err"); }
   };
 
@@ -63,7 +74,10 @@ export default function ChatScreen() {
         <Avatar uri={q.data?.picture} name={q.data?.title} size={36} />
         <View style={{ flex: 1 }}>
           <Text style={s.title} numberOfLines={1} testID="chat-title">{q.data?.title ?? "..."}</Text>
-          <Text style={s.sub}>{q.data?.kind === "party" ? "Party group chat · hold a message to report" : "Match"}</Text>
+          <Text style={s.sub}>
+            {live.typingNames.length ? `${live.typingNames.slice(0, 2).join(", ")} ${live.typingNames.length > 1 ? "are" : "is"} typing…`
+              : q.data?.kind === "party" ? "Party group chat · hold a message to report" : live.connected ? "Live" : "Match"}
+          </Text>
         </View>
         {q.data?.kind === "match" && q.data.other_user_id && (
           <IconBtn testID="chat-safety-button" icon="ellipsis-horizontal" onPress={() => setSafety({ user_id: q.data!.other_user_id!, name: q.data!.title })} />
@@ -93,12 +107,15 @@ export default function ChatScreen() {
           }}
         />
         <View style={[s.inputBar, { paddingBottom: insets.bottom + 8 }]}>
+          {live.typingNames.length > 0 && (
+            <View style={s.typingPill} testID="typing-indicator"><Text style={s.typingText}>{live.typingNames[0]} is typing…</Text></View>
+          )}
           {q.data?.kind === "match" && (
             <Pressable testID="ai-icebreaker-button" onPress={icebreaker} disabled={wing} style={s.wing}>
               {wing ? <ActivityIndicator color={colors.onBrandSecondary} size="small" /> : <Ionicons name="sparkles" size={20} color={colors.onBrandSecondary} />}
             </Pressable>
           )}
-          <TextInput testID="chat-input" style={s.input} placeholder="Message..." placeholderTextColor={colors.muted} value={text} onChangeText={setText} onSubmitEditing={send} returnKeyType="send" />
+          <TextInput testID="chat-input" style={s.input} placeholder="Message..." placeholderTextColor={colors.muted} value={text} onChangeText={(v) => { setText(v); if (v) live.sendTyping(true); }} onSubmitEditing={send} returnKeyType="send" />
           <Pressable testID="chat-send-button" onPress={send} style={s.send}>
             <Ionicons name="arrow-up" size={22} color={colors.onBrandPrimary} />
           </Pressable>
@@ -121,6 +138,8 @@ const useStyles = makeStyles((c) => ({
   sender: { color: c.brandSecondary, fontWeight: "800", fontSize: 12, marginBottom: 2 },
   msg: { color: c.onSurface, fontSize: 15, lineHeight: 20 },
   inputBar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: spacing.md, paddingTop: 8, borderTopWidth: 1, borderTopColor: c.divider, backgroundColor: c.surface },
+  typingPill: { position: "absolute", top: -30, left: spacing.md, backgroundColor: c.surfaceTertiary, paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.pill },
+  typingText: { color: c.brandSecondary, fontSize: 12, fontWeight: "700" },
   input: { flex: 1, height: 46, borderRadius: 23, backgroundColor: c.surfaceTertiary, color: c.onSurface, paddingHorizontal: 16, fontSize: 15 },
   wing: { width: 46, height: 46, borderRadius: 23, backgroundColor: c.brandSecondary, alignItems: "center", justifyContent: "center" },
   send: { width: 46, height: 46, borderRadius: 23, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },

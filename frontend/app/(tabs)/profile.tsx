@@ -9,6 +9,7 @@ import { api, User } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { usesNativeTabs } from "@/src/navigation";
 import { ChangePhotoBadge, usePhotoPicker } from "@/src/photo";
+import { Rating } from "@/src/party-extras";
 import { Sheet } from "@/src/sheet";
 import { Avatar, Btn, Ionicons, TierBadge, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -34,6 +35,7 @@ export default function Profile() {
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Text style={s.name} testID="profile-name">{user.name}{user.age ? `, ${user.age}` : ""}</Text>
           <TierBadge tier={user.tier} testID="profile-tier-badge" />
+          <Rating avg={user.rating_avg} count={user.rating_count} size={14} testID="profile-rating" />
         </View>
         <Text style={s.city}><Ionicons name="location" size={14} color={colors.brandSecondary} /> {user.city}</Text>
         {!!user.bio && <Text style={s.bio}>{user.bio}</Text>}

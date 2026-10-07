@@ -16,7 +16,7 @@ type Ctx = {
   loading: boolean;
   purchaseIdentityError: string | null;
   login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  register: (name: string, email: string, password: string, dob: string) => Promise<void>;
   googleLogin: () => Promise<void>;
   appleLogin: (identityToken: string, name?: string | null, email?: string | null) => Promise<void>;
   logout: () => Promise<void>;
@@ -134,8 +134,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const r = await api<{ token: string; user: User }>("/auth/login", { body: { email, password } });
     await saveSession(r.token, r.user);
   };
-  const register = async (name: string, email: string, password: string) => {
-    const r = await api<{ token: string; user: User }>("/auth/register", { body: { name, email, password } });
+  const register = async (name: string, email: string, password: string, dob: string) => {
+    const r = await api<{ token: string; user: User }>("/auth/register", { body: { name, email, password, dob } });
     await saveSession(r.token, r.user);
   };
   const appleLogin = async (identityToken: string, name?: string | null, email?: string | null) => {

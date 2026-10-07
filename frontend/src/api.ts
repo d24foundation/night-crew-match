@@ -8,6 +8,7 @@ let storeTier: string | null = null;
 let onUnauthorized: (() => void) | null = null;
 
 export const setApiToken = (t: string | null) => { token = t; };
+export const getApiToken = () => token;
 export const setStoreTier = (t: string | null) => { storeTier = t; };
 export const setUnauthorizedHandler = (fn: () => void) => { onUnauthorized = fn; };
 
@@ -40,7 +41,7 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
 export type User = {
   user_id: string; name: string; picture?: string | null; city: string; bio: string; age?: number | null;
   vibes: string[]; tier: "free" | "premium" | "super"; verified: boolean; boosted: boolean; email?: string;
-  tier_expires?: string | null;
+  tier_expires?: string | null; rating_avg?: number | null; rating_count?: number; age_verified?: boolean;
 };
 
 export type Party = {
@@ -48,9 +49,12 @@ export type Party = {
   vibe: string; house_provided: boolean; drinks_needed: number; chip_in: number; capacity: number; cover: string;
   host_id: string; host: User | null; going_count: number; drinks_count: number; chipin_count: number;
   is_host: boolean; attending: boolean; my_role: string | null; address: string | null;
-  can_see_attendees: boolean; attendees: (User & { role: string })[]; attendee_pics: (string | null)[];
+  can_see_attendees: boolean; attendees: (User & { role: string; checked_in: boolean })[]; attendee_pics: (string | null)[];
   lat: number | null; lng: number | null; distance_km: number | null; invite_code: string | null;
+  started: boolean; checked_in_count: number;
 };
+
+export const wsUrl = (path: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL!.replace(/^http/, "ws")}/api${path}`;
 
 // Profile photos are stored as "/api/files/<id>" and served by our backend; absolute URLs pass through.
 export const resolveUri = (uri?: string | null) => (!uri ? uri : uri.startsWith("/") ? `${process.env.EXPO_PUBLIC_BACKEND_URL}${uri}` : uri);

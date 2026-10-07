@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 
 import { useAuth } from "@/src/auth";
+import { dobToIso, formatDob } from "@/src/age";
 import { Btn, Ionicons, Wordmark } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -48,6 +49,7 @@ export default function Login() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [dob, setDob] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -76,7 +78,11 @@ export default function Login() {
     setBusy(true);
     try {
       if (mode === "login") await login(email.trim(), password);
-      else await register(name.trim(), email.trim(), password);
+      else {
+        const iso = dobToIso(dob);
+        if (!iso) { setErr("Enter your birthday as DD/MM/YYYY"); return; }
+        await register(name.trim(), email.trim(), password, iso);
+      }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -97,7 +103,10 @@ export default function Login() {
 
         <Animated.View entering={FadeInDown.delay(150).duration(500)} style={s.form}>
           {mode === "register" && (
-            <TextInput testID="register-name-input" style={s.input} placeholder="Your name" placeholderTextColor={colors.muted} value={name} onChangeText={setName} />
+            <>
+              <TextInput testID="register-name-input" style={s.input} placeholder="Your name" placeholderTextColor={colors.muted} value={name} onChangeText={setName} />
+              <TextInput testID="register-dob-input" style={s.input} placeholder="Birthday (DD/MM/YYYY) — 18+ only" placeholderTextColor={colors.muted} keyboardType="number-pad" value={dob} onChangeText={(v) => setDob(formatDob(v))} maxLength={10} />
+            </>
           )}
           <TextInput testID="login-email-input" style={s.input} placeholder="Email" placeholderTextColor={colors.muted} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
           <TextInput testID="login-password-input" style={s.input} placeholder="Password" placeholderTextColor={colors.muted} secureTextEntry value={password} onChangeText={setPassword} />

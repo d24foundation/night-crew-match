@@ -10,6 +10,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { ErrorBoundary } from "@/src/components/error-boundary";
+import { AgeGate } from "@/src/age";
 import { queryClient } from "@/src/query-client";
 import { AuthProvider, useAuth } from "@/src/auth";
 import { initializeRevenueCat, SubscriptionProvider } from "@/src/revenuecat";
@@ -71,6 +72,7 @@ function Gate() {
   return (
     <>
     {user && pushEnabled && <PushManager />}
+    {user && <AgeGate />}
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.surface } }}>
       <Stack.Protected guard={!user}>
         <Stack.Screen name="login" />
@@ -83,6 +85,7 @@ function Gate() {
         <Stack.Screen name="premium" options={{ presentation: "modal" }} />
         <Stack.Screen name="edit-profile" options={{ presentation: "modal" }} />
         <Stack.Screen name="invite/[code]" options={{ presentation: "modal" }} />
+        <Stack.Screen name="party/scan/[id]" options={{ presentation: "modal" }} />
       </Stack.Protected>
     </Stack>
     </>

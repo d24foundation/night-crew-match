@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -147,10 +147,13 @@ def public_user(u: dict, me: bool = False) -> dict:
         "city": u.get("city", "London"), "bio": u.get("bio", ""), "age": u.get("age"),
         "vibes": u.get("vibes", []), "tier": tier, "verified": tier == "super",
         "boosted": bool(parse_dt(u.get("boosted_until")) and parse_dt(u.get("boosted_until")) > now()),
+        "rating_avg": round(u["rating_sum"] / u["rating_count"], 1) if u.get("rating_count") else None,
+        "rating_count": u.get("rating_count", 0),
     }
     if me:
         out["email"] = u.get("email")
         out["tier_expires"] = u.get("tier_expires") if tier != "free" else None
+        out["age_verified"] = bool(u.get("age_verified"))
     return out
 
 
@@ -223,6 +226,21 @@ class RegisterIn(BaseModel):
     email: str
     password: str = Field(min_length=6)
     name: str = Field(min_length=1, max_length=40)
+    dob: str  # YYYY-MM-DD, must be 18+
+
+
+def age_from_dob(dob: str) -> int:
+    try:
+        d = datetime.strptime(dob, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(400, "Enter your birthday as YYYY-MM-DD")
+    t = now().date()
+    age = t.year - d.year - ((t.month, t.day) < (d.month, d.day))
+    if age < 18:
+        raise HTTPException(403, "After Party is 18+ only")
+    if age > 100:
+        raise HTTPException(400, "Check your birthday")
+    return age
 
 
 class LoginIn(BaseModel):
@@ -241,7 +259,8 @@ async def register(body: RegisterIn):
         raise HTTPException(400, "Invalid email")
     if await db.users.find_one({"email": email}):
         raise HTTPException(409, "Account already exists")
-    u = {"user_id": new_id("user"), "email": email, "name": body.name.strip(),
+    age = age_from_dob(body.dob)
+    u = {"user_id": new_id("user"), "email": email, "name": body.name.strip(), "dob": body.dob, "age": age, "age_verified": True,
          "password_hash": bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode(),
          "city": "London", "bio": "", "vibes": [], "tier": "free", "created_at": iso(now())}
     await db.users.insert_one(u)
@@ -406,6 +425,96 @@ async def update_me(body: ProfileIn, u=Depends(current_user)):
     return public_user(u, True)
 
 
+class AgeIn(BaseModel):
+    dob: str
+
+
+@api.post("/me/verify-age")
+async def verify_age(body: AgeIn, u=Depends(current_user)):
+    age = age_from_dob(body.dob)
+    upd = {"dob": body.dob, "age": age, "age_verified": True}
+    await db.users.update_one({"user_id": u["user_id"]}, {"$set": upd})
+    u.update(upd)
+    return public_user(u, True)
+
+
+# ---------------- Ratings ----------------
+class RateIn(BaseModel):
+    stars: int = Field(ge=1, le=5)
+    comment: str = Field("", max_length=300)
+
+
+@api.post("/parties/{party_id}/rate")
+async def rate_party(party_id: str, body: RateIn, u=Depends(current_user)):
+    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Party not found")
+    if not any(a["user_id"] == u["user_id"] for a in p["attendees"]):
+        raise HTTPException(403, "Only guests can rate this party")
+    if parse_dt(p["starts_at"]) > now():
+        raise HTTPException(400, "You can rate once the party has started")
+    prev = await db.ratings.find_one({"party_id": party_id, "user_id": u["user_id"]}, {"_id": 0})
+    await db.ratings.update_one({"party_id": party_id, "user_id": u["user_id"]},
+                                {"$set": {"stars": body.stars, "comment": body.comment.strip(), "host_id": p["host_id"], "created_at": iso(now())}}, upsert=True)
+    delta_sum, delta_n = (body.stars - prev["stars"], 0) if prev else (body.stars, 1)
+    await db.users.update_one({"user_id": p["host_id"]}, {"$inc": {"rating_sum": delta_sum, "rating_count": delta_n}})
+    if not prev:
+        await notify([p["host_id"]], {"title": f"{'⭐' * body.stars} for {p['title']}", "message": f"{u.get('name')} rated your afters {body.stars}/5", "action_url": f"/party/{party_id}"})
+    return {"stars": body.stars, "comment": body.comment.strip()}
+
+
+@api.get("/ratings/pending")
+async def pending_ratings(u=Depends(current_user)):
+    since = iso(now() - timedelta(days=3))
+    ps = await db.parties.find({"attendees.user_id": u["user_id"], "starts_at": {"$lte": iso(now()), "$gte": since}}, {"_id": 0}).sort("starts_at", -1).to_list(20)
+    rated = set(await db.ratings.distinct("party_id", {"user_id": u["user_id"]}))
+    out = [p for p in ps if p["party_id"] not in rated]
+    hosts, users = await load_people(out)
+    return [party_view(p, u, hosts, users) for p in out]
+
+
+# ---------------- Check-in QR ----------------
+class CheckinIn(BaseModel):
+    code: str
+
+
+@api.get("/parties/{party_id}/ticket")
+async def my_ticket(party_id: str, u=Depends(current_user)):
+    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Party not found")
+    att = next((a for a in p["attendees"] if a["user_id"] == u["user_id"]), None)
+    if not att:
+        raise HTTPException(403, "Join the party to get a door pass")
+    code = att.get("ticket")
+    if not code:
+        code = secrets.token_hex(3).upper()
+        await db.parties.update_one({"party_id": party_id, "attendees.user_id": u["user_id"]}, {"$set": {"attendees.$.ticket": code}})
+    return {"code": code, "qr": f"afterparty:{party_id}:{code}", "checked_in": bool(att.get("checked_in_at")), "party_title": p["title"]}
+
+
+@api.post("/parties/{party_id}/checkin")
+async def checkin(party_id: str, body: CheckinIn, u=Depends(current_user)):
+    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Party not found")
+    if p["host_id"] != u["user_id"]:
+        raise HTTPException(403, "Only the host can check people in")
+    raw = body.code.strip()
+    code = raw.split(":")[-1].upper() if raw.lower().startswith("afterparty:") else raw.upper()
+    if raw.lower().startswith("afterparty:") and raw.split(":")[1] != party_id:
+        raise HTTPException(400, "That pass is for a different party")
+    att = next((a for a in p["attendees"] if a.get("ticket") == code), None)
+    if not att:
+        raise HTTPException(404, "Pass not recognised — they haven't joined this party")
+    guest = await db.users.find_one({"user_id": att["user_id"]}, {"_id": 0})
+    if att.get("checked_in_at"):
+        return {"ok": True, "already": True, "guest": public_user(guest), "checked_in_at": att["checked_in_at"]}
+    ts = iso(now())
+    await db.parties.update_one({"party_id": party_id, "attendees.user_id": att["user_id"]}, {"$set": {"attendees.$.checked_in_at": ts}})
+    return {"ok": True, "already": False, "guest": public_user(guest), "checked_in_at": ts}
+
+
 @api.post("/me/photo")
 async def upload_photo(file: UploadFile = File(...), u=Depends(current_user)):
     ctype = (file.content_type or "").lower()
@@ -550,7 +659,9 @@ def party_view(p: dict, viewer: dict, hosts: dict, users: dict, me_pos: Optional
         "my_role": next((a["role"] for a in atts if a["user_id"] == uid), None),
         "address": p.get("address") if (is_host or attending) else None,
         "can_see_attendees": can_see,
-        "attendees": [dict(public_user(users[a["user_id"]]), role=a["role"]) for a in atts if a["user_id"] in users] if can_see else [],
+        "attendees": [dict(public_user(users[a["user_id"]]), role=a["role"], checked_in=bool(a.get("checked_in_at"))) for a in atts if a["user_id"] in users] if can_see else [],
+        "checked_in_count": sum(1 for a in atts if a.get("checked_in_at")),
+        "started": parse_dt(p["starts_at"]) <= now(),
         "attendee_pics": [users[a["user_id"]].get("picture") for a in atts[:4] if a["user_id"] in users],
     })
     return out
@@ -744,6 +855,56 @@ class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=1000)
 
 
+class ChatHub:
+    """In-memory websocket fan-out per chat (single backend process)."""
+    def __init__(self):
+        self.rooms: dict = {}
+
+    def join(self, chat_id: str, ws: WebSocket):
+        self.rooms.setdefault(chat_id, set()).add(ws)
+
+    def leave(self, chat_id: str, ws: WebSocket):
+        self.rooms.get(chat_id, set()).discard(ws)
+
+    async def broadcast(self, chat_id: str, data: dict, exclude: Optional[WebSocket] = None):
+        for ws in list(self.rooms.get(chat_id, set())):
+            if ws is exclude:
+                continue
+            try:
+                await ws.send_json(data)
+            except Exception:
+                self.leave(chat_id, ws)
+
+
+hub = ChatHub()
+
+
+@api.websocket("/ws/chats/{chat_id}")
+async def chat_ws(ws: WebSocket, chat_id: str, token: str = ""):
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        u = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0})
+        if not u:
+            raise ValueError
+        await chat_access(chat_id, u)
+    except Exception:
+        await ws.close(code=4401)
+        return
+    await ws.accept()
+    hub.join(chat_id, ws)
+    try:
+        while True:
+            data = await ws.receive_json()
+            if data.get("type") == "typing":
+                await hub.broadcast(chat_id, {"type": "typing", "user_id": u["user_id"], "name": u.get("name", ""), "on": bool(data.get("on", True))}, exclude=ws)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        hub.leave(chat_id, ws)
+
+
 async def chat_access(chat_id: str, u: dict) -> dict:
     if chat_id.startswith("party_"):
         p = await db.parties.find_one({"party_id": chat_id}, {"_id": 0})
@@ -793,6 +954,7 @@ async def send_message(chat_id: str, body: MessageIn, u=Depends(current_user)):
     m = {"message_id": new_id("msg"), "chat_id": chat_id, "sender_id": u["user_id"], "sender_name": u.get("name", ""),
          "sender_picture": u.get("picture"), "text": body.text.strip(), "created_at": iso(now())}
     await db.messages.insert_one(dict(m))
+    await hub.broadcast(chat_id, {"type": "message", "message": m})
     if chat_id.startswith("party_"):
         p = await db.parties.find_one({"party_id": chat_id}, {"_id": 0})
         rec = [p["host_id"]] + [a["user_id"] for a in p["attendees"]]
@@ -954,6 +1116,9 @@ async def startup():
         if not p.get("invite_code"):
             upd["invite_code"] = secrets.token_urlsafe(6)
         await db.parties.update_one({"party_id": p["party_id"]}, {"$set": upd})
+    # Existing accounts created before age verification: trust the stored age
+    await db.users.update_many({"age_verified": {"$exists": False}, "age": {"$gte": 18}}, {"$set": {"age_verified": True}})
+    await db.ratings.create_index([("party_id", 1), ("user_id", 1)], unique=True)
 
 
 app.include_router(api)

@@ -13,6 +13,7 @@ import { api, ApiError, resolveUri, User } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { usesNativeTabs } from "@/src/navigation";
 import { SafetySheet } from "@/src/safety";
+import { Rating } from "@/src/party-extras";
 import { Avatar, Btn, IconBtn, Ionicons, TierBadge, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -161,6 +162,7 @@ function Card({ u, behind }: { u: User; behind?: boolean }) {
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Text style={s.name}>{u.name}{u.age ? `, ${u.age}` : ""}</Text>
           <TierBadge tier={u.tier} />
+          <Rating avg={u.rating_avg} count={u.rating_count} size={14} />
         </View>
         <Text style={s.city}><Ionicons name="location" size={14} color={colors.brandSecondary} /> {u.city}</Text>
         {!!u.bio && <Text style={s.bio} numberOfLines={2}>{u.bio}</Text>}

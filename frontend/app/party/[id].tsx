@@ -9,6 +9,7 @@ import * as Clipboard from "expo-clipboard";
 
 import { api, ApiError, fmtDistance, inviteLink, Party } from "@/src/api";
 import { SafetySheet } from "@/src/safety";
+import { DoorPass, RateCard, Rating } from "@/src/party-extras";
 import { Avatar, Btn, formatStart, IconBtn, Ionicons, TierBadge, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -26,6 +27,7 @@ export default function PartyDetail() {
   const [role, setRole] = useState<Role>("chipin");
   const [busy, setBusy] = useState(false);
   const [safety, setSafety] = useState<{ user_id: string; name: string } | null>(null);
+  const [pass, setPass] = useState(false);
   const p = q.data;
 
   // Arrived via an invite link: auto-join once (invites bypass the free daily join limit).
@@ -112,13 +114,16 @@ export default function PartyDetail() {
             <Avatar uri={p.host?.picture} name={p.host?.name} size={44} />
             <View style={{ flex: 1 }}>
               <Text style={s.muted}>Hosted by</Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <Text style={s.hostName}>{p.host?.name}</Text>
                 {p.host && <TierBadge tier={p.host.tier} />}
+                <Rating avg={p.host?.rating_avg} count={p.host?.rating_count} testID="host-rating" />
               </View>
             </View>
             <Text style={s.count} testID="party-going-count">{p.going_count}/{p.capacity}</Text>
           </View>
+
+          {p.attending && p.started && <RateCard partyId={p.party_id} hostName={p.host?.name} onRated={() => { q.refetch(); qc.invalidateQueries({ queryKey: ["ratings-pending"] }); }} />}
 
           <View style={s.stats}>
             <Stat icon="home" label={p.house_provided ? "House sorted" : "Need a house"} ok={p.house_provided} />
@@ -145,7 +150,7 @@ export default function PartyDetail() {
             {!!p.address && <Ionicons name="navigate" size={18} color={colors.brandSecondary} />}
           </Pressable>
 
-          <Text style={s.section}>Who's going</Text>
+          <Text style={s.section}>Who's going{p.is_host && p.checked_in_count > 0 ? ` · ${p.checked_in_count} checked in` : ""}</Text>
           {p.can_see_attendees ? (
             <View style={{ gap: 10 }} testID="attendee-list">
               {p.attendees.length === 0 && <Text style={s.muted}>No one yet — be first.</Text>}
@@ -154,6 +159,7 @@ export default function PartyDetail() {
                   <Avatar uri={a.picture} name={a.name} size={36} />
                   <Text style={s.attName}>{a.name}</Text>
                   <TierBadge tier={a.tier} />
+                  {a.checked_in && <Ionicons name="checkmark-circle" size={16} color={colors.brandSecondary} testID={`checked-in-${a.user_id}`} />}
                   <View style={{ flex: 1 }} />
                   <Text style={s.attRole}>{a.role === "drinks" ? "Drinks" : a.role === "house" ? "House" : "Chip-in"}</Text>
                 </Pressable>
@@ -198,6 +204,8 @@ export default function PartyDetail() {
         {p.is_host || p.attending ? (
           <View style={{ flexDirection: "row", gap: 10 }}>
             <Btn testID="open-party-chat-button" title="Group chat" icon="chatbubbles" style={{ flex: 1 }} onPress={() => router.push(`/chat/${p.party_id}`)} />
+            {p.is_host && <Btn testID="scan-door-button" title="Door" icon="qr-code" variant="lime" onPress={() => router.push(`/party/scan/${p.party_id}`)} />}
+            {p.attending && <Btn testID="door-pass-button" title="Pass" icon="qr-code" variant="lime" onPress={() => setPass(true)} />}
             {p.attending && <Btn testID="leave-party-button" title="Leave" variant="ghost" loading={busy} onPress={() => act("leave")} />}
           </View>
         ) : (
@@ -205,6 +213,7 @@ export default function PartyDetail() {
         )}
       </View>
       <SafetySheet target={safety} context={p.party_id} onClose={() => setSafety(null)} onBlocked={(uid) => { if (uid === p.host_id) router.back(); else q.refetch(); }} />
+      <DoorPass partyId={p.party_id} visible={pass} onClose={() => setPass(false)} />
     </View>
   );
 }
