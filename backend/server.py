@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 import math
 import secrets
 import requests
+import time
+from collections import defaultdict, deque
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
@@ -36,6 +38,9 @@ logger = logging.getLogger("afterparty")
 logging.basicConfig(level=logging.INFO)
 
 PLANS = {"premium": 3.99, "super": 7.99}
+# One-off credit packs (GBP): price -> credits. Credits unlock boosts, extra joins and party promotion without a subscription.
+CREDIT_PACKS = {"shot": {"price": 1.00, "credits": 10, "label": "Shot"}, "round": {"price": 2.00, "credits": 25, "label": "Round"}, "bottle": {"price": 5.00, "credits": 70, "label": "Bottle"}}
+COST_BOOST, COST_EXTRA_JOIN, COST_PROMOTE, REFERRAL_REWARD = 5, 2, 10, 5
 FREE_JOINS_PER_DAY = 3
 FREE_LIKES_PER_DAY = 25
 COVERS = [
@@ -154,6 +159,7 @@ def public_user(u: dict, me: bool = False) -> dict:
         out["email"] = u.get("email")
         out["tier_expires"] = u.get("tier_expires") if tier != "free" else None
         out["age_verified"] = bool(u.get("age_verified"))
+        out["credits"] = int(u.get("credits", 0))
     return out
 
 
@@ -227,6 +233,33 @@ class RegisterIn(BaseModel):
     password: str = Field(min_length=6)
     name: str = Field(min_length=1, max_length=40)
     dob: str  # YYYY-MM-DD, must be 18+
+    ref: Optional[str] = Field(None, max_length=16)  # referral code
+
+
+async def add_credits(user_id: str, amount: int, reason: str, ref: Optional[str] = None):
+    await db.users.update_one({"user_id": user_id}, {"$inc": {"credits": amount}})
+    await db.credit_ledger.insert_one({"entry_id": new_id("cr"), "user_id": user_id, "amount": amount, "reason": reason, "ref": ref, "created_at": iso(now())})
+
+
+async def spend_credits(u: dict, amount: int, reason: str, ref: Optional[str] = None):
+    """Atomic debit: only succeeds if the balance covers it."""
+    res = await db.users.update_one({"user_id": u["user_id"], "credits": {"$gte": amount}}, {"$inc": {"credits": -amount}})
+    if not res.modified_count:
+        raise HTTPException(402, f"Needs {amount} credits — you have {int(u.get('credits', 0))}. Top up from £1.")
+    u["credits"] = int(u.get("credits", 0)) - amount
+    await db.credit_ledger.insert_one({"entry_id": new_id("cr"), "user_id": u["user_id"], "amount": -amount, "reason": reason, "ref": ref, "created_at": iso(now())})
+
+
+async def apply_referral(new_user: dict, code: Optional[str]):
+    if not code:
+        return
+    ref = await db.users.find_one({"referral_code": code.strip().upper()}, {"_id": 0})
+    if not ref or ref["user_id"] == new_user["user_id"]:
+        return
+    await db.users.update_one({"user_id": new_user["user_id"]}, {"$set": {"referred_by": ref["user_id"]}})
+    await add_credits(new_user["user_id"], REFERRAL_REWARD, "referral_welcome", ref["user_id"])
+    await add_credits(ref["user_id"], REFERRAL_REWARD, "referral_reward", new_user["user_id"])
+    await notify([ref["user_id"]], {"title": f"{new_user.get('name')} joined with your link", "message": f"+{REFERRAL_REWARD} credits landed in your account. Keep spreading the word!", "action_url": "/credits"})
 
 
 def age_from_dob(dob: str) -> int:
@@ -262,8 +295,10 @@ async def register(body: RegisterIn):
     age = age_from_dob(body.dob)
     u = {"user_id": new_id("user"), "email": email, "name": body.name.strip(), "dob": body.dob, "age": age, "age_verified": True,
          "password_hash": bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode(),
-         "city": "London", "bio": "", "vibes": [], "tier": "free", "created_at": iso(now())}
+         "city": "London", "bio": "", "vibes": [], "tier": "free", "credits": 0, "referral_code": secrets.token_hex(3).upper(), "created_at": iso(now())}
     await db.users.insert_one(u)
+    await apply_referral(u, body.ref)
+    u = await db.users.find_one({"user_id": u["user_id"]}, {"_id": 0})
     return {"token": make_token(u["user_id"]), "user": public_user(u, True)}
 
 
@@ -523,6 +558,10 @@ async def upload_photo(file: UploadFile = File(...), u=Depends(current_user)):
     data = await file.read()
     if len(data) > MAX_PHOTO_BYTES:
         raise HTTPException(413, "Photo too large (max 6MB)")
+    # Verify the bytes really are an image (don't trust the declared content type)
+    magic_ok = data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP") or data[4:8] == b"ftyp"
+    if not magic_ok:
+        raise HTTPException(400, "That file isn't a valid image")
     ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic"}[ctype]
     file_id = uuid.uuid4().hex
     path = f"{STORAGE_APP}/uploads/{u['user_id']}/{file_id}.{ext}"
@@ -610,10 +649,71 @@ async def report_user(body: ReportIn, u=Depends(current_user)):
 @api.post("/me/boost")
 async def boost(u=Depends(current_user)):
     if effective_tier(u) == "free":
-        raise HTTPException(402, "Boost is a Premium perk")
+        # Free members can boost with credits instead of a subscription
+        await spend_credits(u, COST_BOOST, "boost")
     until = now() + timedelta(minutes=60)
     await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"boosted_until": iso(until)}})
-    return {"boosted_until": iso(until)}
+    return {"boosted_until": iso(until), "credits": int(u.get("credits", 0))}
+
+
+# ---------------- Credits, referrals & marketing ----------------
+@api.get("/credits")
+async def credits(u=Depends(current_user)):
+    ledger = await db.credit_ledger.find({"user_id": u["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(30)
+    return {"balance": int(u.get("credits", 0)), "packs": CREDIT_PACKS, "ledger": ledger,
+            "costs": {"boost": COST_BOOST, "extra_join": COST_EXTRA_JOIN, "promote": COST_PROMOTE, "referral": REFERRAL_REWARD}}
+
+
+async def ensure_referral_code(u: dict) -> str:
+    code = u.get("referral_code")
+    if not code:
+        code = secrets.token_hex(3).upper()
+        await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"referral_code": code}})
+    return code
+
+
+@api.get("/me/referral")
+async def my_referral(u=Depends(current_user)):
+    code = await ensure_referral_code(u)
+    invited = await db.users.count_documents({"referred_by": u["user_id"]})
+    earned = sum(e["amount"] for e in await db.credit_ledger.find({"user_id": u["user_id"], "reason": "referral_reward"}, {"_id": 0}).to_list(1000))
+    return {"code": code, "invited": invited, "earned": earned, "reward": REFERRAL_REWARD}
+
+
+@api.get("/parties/{party_id}/promo")
+async def party_promo(party_id: str, u=Depends(current_user)):
+    """Ready-to-post social caption so hosts can market their afters in one tap."""
+    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Party not found")
+    if p.get("promo"):
+        return p["promo"]
+    try:
+        text = await gemini(
+            "You write short, viral Instagram/TikTok captions for London nightlife. Max 220 characters. Include 1-2 emojis and end with 3 hashtags including #AfterParty. Never include an address.",
+            f"Party: {p['title']}. Vibe: {p['vibe']}. Area: {p['area']}, {p['city']}. Starts {p['starts_at']}. Description: {p.get('description', '')}. Guests bring drinks or chip in £{p['chip_in']}.",
+            f"promo-{party_id}")
+    except Exception as e:
+        logger.warning("promo generation failed: %s", e)
+        text = f"Afters at {p['area']} tonight 🔥 {p['vibe']} vibes, bring drinks or chip in. Tap in before it fills up. #AfterParty #{p['city'].replace(' ', '')}Nights #Afters"
+    promo = {"caption": text.strip(), "generated_at": iso(now())}
+    await db.parties.update_one({"party_id": party_id}, {"$set": {"promo": promo}})
+    return promo
+
+
+@api.post("/parties/{party_id}/promote")
+async def promote_party(party_id: str, u=Depends(current_user)):
+    p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Party not found")
+    if p["host_id"] != u["user_id"]:
+        raise HTTPException(403, "Only the host can promote this party")
+    if parse_dt(p.get("promoted_until") or "2000-01-01T00:00:00+00:00") > now():
+        raise HTTPException(400, "Already promoted — it's pinned to the top of the feed")
+    await spend_credits(u, COST_PROMOTE, "promote", party_id)
+    until = iso(now() + timedelta(hours=24))
+    await db.parties.update_one({"party_id": party_id}, {"$set": {"promoted_until": until}})
+    return {"promoted_until": until, "credits": int(u.get("credits", 0))}
 
 
 # ---------------- Parties ----------------
@@ -635,6 +735,7 @@ class PartyIn(BaseModel):
 
 class JoinIn(BaseModel):
     role: Literal["house", "drinks", "chipin"]
+    use_credits: bool = False
 
 
 def party_view(p: dict, viewer: dict, hosts: dict, users: dict, me_pos: Optional[tuple] = None) -> dict:
@@ -662,6 +763,7 @@ def party_view(p: dict, viewer: dict, hosts: dict, users: dict, me_pos: Optional
         "attendees": [dict(public_user(users[a["user_id"]]), role=a["role"], checked_in=bool(a.get("checked_in_at"))) for a in atts if a["user_id"] in users] if can_see else [],
         "checked_in_count": sum(1 for a in atts if a.get("checked_in_at")),
         "started": parse_dt(p["starts_at"]) <= now(),
+        "promoted": bool(p.get("promoted_until")) and parse_dt(p["promoted_until"]) > now(),
         "attendee_pics": [users[a["user_id"]].get("picture") for a in atts[:4] if a["user_id"] in users],
     })
     return out
@@ -689,8 +791,8 @@ async def list_parties(city: Optional[str] = None, lat: Optional[float] = None, 
     hosts, users = await load_people(parties)
     me_pos = (lat, lng) if (lat is not None and lng is not None) else None
     views = [party_view(p, u, hosts, users, me_pos) for p in parties]
-    # Host priority: Super Premium hosts float to the top
-    views.sort(key=lambda v: 0 if (v["host"] and v["host"]["tier"] == "super") else 1)
+    # Promoted parties first, then Super Premium hosts
+    views.sort(key=lambda v: (0 if v["promoted"] else 1, 0 if (v["host"] and v["host"]["tier"] == "super") else 1))
     return views
 
 
@@ -723,7 +825,7 @@ async def get_party(party_id: str, u=Depends(current_user)):
     return party_view(p, u, hosts, users)
 
 
-async def do_join(p: dict, u: dict, role: str, invited: bool = False):
+async def do_join(p: dict, u: dict, role: str, invited: bool = False, use_credits: bool = False):
     party_id = p["party_id"]
     if p["host_id"] == u["user_id"]:
         raise HTTPException(400, "You're the host")
@@ -737,7 +839,10 @@ async def do_join(p: dict, u: dict, role: str, invited: bool = False):
         since = iso(now() - timedelta(hours=24))
         n = await db.parties.count_documents({"attendees": {"$elemMatch": {"user_id": u["user_id"], "joined_at": {"$gte": since}}}})
         if n >= FREE_JOINS_PER_DAY:
-            raise HTTPException(402, f"Free plan: {FREE_JOINS_PER_DAY} joins per day. Go Premium for unlimited.")
+            if use_credits:
+                await spend_credits(u, COST_EXTRA_JOIN, "extra_join", party_id)
+            else:
+                raise HTTPException(402, f"Free plan: {FREE_JOINS_PER_DAY} joins per day. Go Premium for unlimited, or use {COST_EXTRA_JOIN} credits.")
     await db.parties.update_one({"party_id": party_id}, {"$push": {"attendees": {"user_id": u["user_id"], "role": role, "joined_at": iso(now()), "invited": invited}}})
     role_txt = {"drinks": "is bringing drinks", "chipin": "is chipping in", "house": "can offer a house"}[role]
     await notify([p["host_id"]], {"title": f"{u.get('name')} is down for {p['title']}", "message": f"{u.get('name')} {role_txt}{' (via your invite link)' if invited else ''}. Party's growing!", "action_url": f"/party/{party_id}"})
@@ -749,7 +854,7 @@ async def join_party(party_id: str, body: JoinIn, u=Depends(current_user)):
     p = await db.parties.find_one({"party_id": party_id}, {"_id": 0})
     if not p:
         raise HTTPException(404, "Party not found")
-    return await do_join(p, u, body.role)
+    return await do_join(p, u, body.role, use_credits=body.use_credits)
 
 
 @api.get("/parties/{party_id}/invite")
@@ -969,7 +1074,8 @@ async def send_message(chat_id: str, body: MessageIn, u=Depends(current_user)):
 
 # ---------------- Payments (Stripe) ----------------
 class CheckoutIn(BaseModel):
-    plan: Literal["premium", "super"]
+    plan: Optional[Literal["premium", "super"]] = None
+    pack: Optional[Literal["shot", "round", "bottle"]] = None
     origin_url: str
 
 
@@ -980,16 +1086,24 @@ def stripe_client(request: Request) -> StripeCheckout:
 
 @api.post("/payments/checkout")
 async def checkout(body: CheckoutIn, request: Request, u=Depends(current_user)):
+    if not body.plan and not body.pack:
+        raise HTTPException(400, "Choose a plan or a credit pack")
     origin = body.origin_url.rstrip("/")
+    if not origin.startswith(("http://", "https://")):
+        raise HTTPException(400, "Invalid origin")
     sc = stripe_client(request)
+    if body.pack:
+        amount, kind, item, page = CREDIT_PACKS[body.pack]["price"], "credits", body.pack, "credits"
+    else:
+        amount, kind, item, page = PLANS[body.plan], "plan", body.plan, "premium"
     req = CheckoutSessionRequest(
-        amount=PLANS[body.plan], currency="gbp",
-        success_url=f"{origin}/premium?stripe_session={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"{origin}/premium",
-        metadata={"user_id": u["user_id"], "plan": body.plan})
+        amount=amount, currency="gbp",
+        success_url=f"{origin}/{page}?stripe_session={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{origin}/{page}",
+        metadata={"user_id": u["user_id"], "kind": kind, "item": item})
     s = await sc.create_checkout_session(req)
     await db.payment_transactions.insert_one({
-        "session_id": s.session_id, "user_id": u["user_id"], "plan": body.plan, "amount": PLANS[body.plan],
+        "session_id": s.session_id, "user_id": u["user_id"], "kind": kind, "plan": body.plan, "pack": body.pack, "amount": amount,
         "currency": "gbp", "payment_status": "initiated", "processed": False, "created_at": iso(now())})
     return {"url": s.url, "session_id": s.session_id}
 
@@ -1002,7 +1116,10 @@ async def grant_if_paid(session_id: str, payment_status: str):
     if payment_status == "paid":
         res = await db.payment_transactions.update_one({"session_id": session_id, "processed": False}, {"$set": {"processed": True}})
         if res.modified_count:
-            await db.users.update_one({"user_id": tx["user_id"]}, {"$set": {"tier": tx["plan"], "tier_expires": iso(now() + timedelta(days=30))}})
+            if tx.get("pack"):
+                await add_credits(tx["user_id"], CREDIT_PACKS[tx["pack"]]["credits"], "purchase", session_id)
+            else:
+                await db.users.update_one({"user_id": tx["user_id"]}, {"$set": {"tier": tx["plan"], "tier_expires": iso(now() + timedelta(days=30))}})
     return tx
 
 
@@ -1090,8 +1207,10 @@ async def startup():
                                    "city": "London", "vibes": ["House"], "bio": "Here for the afters",
                                    "password_hash": bcrypt.hashpw(b"Test1234!", bcrypt.gensalt()).decode(),
                                    "tier": "free", "created_at": iso(now())})
-    # keep demo parties fresh (always upcoming tonight)
+    # keep demo parties fresh (always upcoming tonight) and never full
+    await db.parties.update_many({"host_id": {"$in": list(ids.values())}, "capacity": {"$lt": 60}}, {"$set": {"capacity": 60}})
     for i, (host, title, city, area, vibe, house, drinks, chip, cap, hrs) in enumerate(DEMO_PARTIES):
+        cap = max(cap, 60)
         existing = await db.parties.find_one({"title": title, "host_id": ids[host]})
         start = iso(now() + timedelta(hours=hrs))
         if existing:
@@ -1119,6 +1238,43 @@ async def startup():
     # Existing accounts created before age verification: trust the stored age
     await db.users.update_many({"age_verified": {"$exists": False}, "age": {"$gte": 18}}, {"$set": {"age_verified": True}})
     await db.ratings.create_index([("party_id", 1), ("user_id", 1)], unique=True)
+    await db.credit_ledger.create_index([("user_id", 1), ("created_at", -1)])
+    await db.users.create_index("referral_code", sparse=True)
+    # Backfill: every account gets a referral code and a credits balance
+    async for usr in db.users.find({"$or": [{"referral_code": {"$exists": False}}, {"credits": {"$exists": False}}]}, {"_id": 0, "user_id": 1, "referral_code": 1}):
+        await db.users.update_one({"user_id": usr["user_id"], "credits": {"$exists": False}}, {"$set": {"credits": 0}})
+        if not usr.get("referral_code"):
+            await db.users.update_one({"user_id": usr["user_id"]}, {"$set": {"referral_code": secrets.token_hex(3).upper()}})
+
+
+# ---------------- Security middleware ----------------
+# Sliding-window rate limit per client IP on sensitive routes (auth, uploads, payments).
+_hits: dict = defaultdict(deque)
+RATE_LIMITS = {"/api/auth/": (20, 60), "/api/me/photo": (10, 60), "/api/payments/": (30, 60), "/api/reports": (10, 60), "/api/me/verify-age": (10, 60)}
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    path = request.url.path
+    for prefix, (limit, window) in RATE_LIMITS.items():
+        if path.startswith(prefix):
+            ip = (request.headers.get("x-forwarded-for") or request.client.host or "?").split(",")[0].strip()
+            key = f"{prefix}|{ip}"
+            q = _hits[key]
+            t = time.monotonic()
+            while q and t - q[0] > window:
+                q.popleft()
+            if len(q) >= limit:
+                return Response(content='{"detail":"Too many attempts. Slow down and try again in a minute."}', status_code=429, media_type="application/json", headers={"Retry-After": str(window)})
+            q.append(t)
+            break
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Cache-Control"] = response.headers.get("Cache-Control", "no-store")
+    return response
 
 
 app.include_router(api)

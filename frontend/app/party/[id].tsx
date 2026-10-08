@@ -7,7 +7,9 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 
-import { api, ApiError, fmtDistance, inviteLink, Party } from "@/src/api";
+import { api, ApiError, fmtDistance, inviteLink, Party, partyLink } from "@/src/api";
+import { useAuth } from "@/src/auth";
+import { JoinWall, PromoSheet } from "@/src/marketing";
 import { SafetySheet } from "@/src/safety";
 import { DoorPass, RateCard, Rating } from "@/src/party-extras";
 import { Avatar, Btn, formatStart, IconBtn, Ionicons, TierBadge, useToast } from "@/src/ui";
@@ -28,6 +30,9 @@ export default function PartyDetail() {
   const [busy, setBusy] = useState(false);
   const [safety, setSafety] = useState<{ user_id: string; name: string } | null>(null);
   const [pass, setPass] = useState(false);
+  const [wall, setWall] = useState(false);
+  const [promo, setPromo] = useState(false);
+  const { refresh } = useAuth();
   const p = q.data;
 
   // Arrived via an invite link: auto-join once (invites bypass the free daily join limit).
@@ -75,11 +80,23 @@ export default function PartyDetail() {
       qc.setQueryData(["party", id], r);
       qc.invalidateQueries({ queryKey: ["parties"] });
       qc.invalidateQueries({ queryKey: ["chats"] });
+      if (body && (body as any).use_credits) refresh();
       toast(path === "join" ? "You're in! Address unlocked" : "You left the party");
     } catch (e) {
+      if (e instanceof ApiError && e.status === 402 && path === "join") { setWall(true); return; }
       toast((e as Error).message, "err");
       if (e instanceof ApiError && e.status === 402) router.push("/premium");
     } finally { setBusy(false); }
+  };
+
+  const shareParty = async () => {
+    if (!p) return;
+    const url = partyLink(p.party_id);
+    const message = `Afters tonight: ${p.title} — ${p.area}, ${p.city} 🔥 I'm going, come through: ${url}`;
+    try {
+      if (Platform.OS === "web") { await Clipboard.setStringAsync(url); toast("Party link copied"); return; }
+      await Share.share(Platform.OS === "ios" ? { message, url } : { message });
+    } catch (e) { toast((e as Error).message, "err"); }
   };
 
   if (!p) return <View style={[s.root, { justifyContent: "center" }]}><ActivityIndicator color={colors.brandPrimary} /></View>;
@@ -100,6 +117,8 @@ export default function PartyDetail() {
             <IconBtn testID="party-back-button" icon="chevron-back" onPress={() => router.back()} />
             <View style={{ flex: 1 }} />
             {p.is_host && <IconBtn testID="share-invite-button" icon="share-social" onPress={share} />}
+            {p.is_host && <IconBtn testID="promo-button" icon="megaphone" onPress={() => setPromo(true)} />}
+            {!p.is_host && <IconBtn testID="share-party-button" icon="share-social" onPress={shareParty} />}
             {!p.is_host && p.host && <IconBtn testID="party-safety-button" icon="ellipsis-horizontal" onPress={() => setSafety({ user_id: p.host!.user_id, name: p.host!.name })} />}
           </View>
           <View style={s.heroText}>
@@ -134,14 +153,24 @@ export default function PartyDetail() {
           {!!p.description && <Text style={s.desc}>{p.description}</Text>}
 
           {p.is_host && (
-            <Pressable testID="invite-card" onPress={share} style={s.invite}>
-              <Ionicons name="link" size={22} color={colors.onBrandSecondary} />
-              <View style={{ flex: 1 }}>
-                <Text style={s.inviteTitle}>Invite your people</Text>
-                <Text style={s.inviteSub}>Share a link that drops friends straight into the party + chat</Text>
-              </View>
-              <Ionicons name="share-social" size={20} color={colors.onBrandSecondary} />
-            </Pressable>
+            <>
+              <Pressable testID="invite-card" onPress={share} style={s.invite}>
+                <Ionicons name="link" size={22} color={colors.onBrandSecondary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.inviteTitle}>Invite your people</Text>
+                  <Text style={s.inviteSub}>Share a link that drops friends straight into the party + chat</Text>
+                </View>
+                <Ionicons name="share-social" size={20} color={colors.onBrandSecondary} />
+              </Pressable>
+              <Pressable testID="promo-card" onPress={() => setPromo(true)} style={[s.invite, { backgroundColor: colors.surfaceSecondary, borderWidth: 1.5, borderColor: colors.gold }]}>
+                <Ionicons name="megaphone" size={22} color={colors.gold} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.inviteTitle, { color: colors.onSurface }]}>{p.promoted ? "Promoted — top of the feed" : "Promote this afters"}</Text>
+                  <Text style={[s.inviteSub, { color: colors.onSurfaceTertiary }]}>AI caption for your story + pin to the top of the feed</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.gold} />
+              </Pressable>
+            </>
           )}
 
           <Pressable style={s.addr} testID="party-address" onPress={openMaps} disabled={!p.address}>
@@ -214,6 +243,8 @@ export default function PartyDetail() {
       </View>
       <SafetySheet target={safety} context={p.party_id} onClose={() => setSafety(null)} onBlocked={(uid) => { if (uid === p.host_id) router.back(); else q.refetch(); }} />
       <DoorPass partyId={p.party_id} visible={pass} onClose={() => setPass(false)} />
+      <JoinWall visible={wall} cost={2} onClose={() => setWall(false)} onUseCredits={() => { setWall(false); act("join", { role, use_credits: true }); }} />
+      {p.is_host && <PromoSheet party={p} visible={promo} onClose={() => setPromo(false)} onPromoted={() => { q.refetch(); qc.invalidateQueries({ queryKey: ["parties"] }); }} />}
     </View>
   );
 }

@@ -1,0 +1,60 @@
+{
+  "summary": "Iteration 6 verification of credits/marketing/security. BACKEND: new test suite /app/backend/tests/test_credits_marketing.py — 15/15 passed (CreditsShape x2, Checkout x3, ReferralAndBoost x3, Promote x2, JoinWithCredits x1, PromoCaption x1, Security x3). Regression: test_new_features 8/8 pass, test_live_features 18/18 pass. backend_test.py: 24 passed, 1 skipped, 3 failed — all 3 failures are environmental (demo parties filled to capacity so fresh user cannot complete 3+ joins) NOT caused by iter-6 changes. FRONTEND (390x844): login test@ → Profile → credits-row (profile-credits=0) → /credits with credits-balance=0, pack prices exactly £1.00/£2.00/£5.00, selecting pack-shot updates buy-credits-button to 'Buy 10 credits for £1.00', clicking triggers redirect to checkout.stripe.com (cs_test session confirmed), referral-code visible 6 chars, credits-to-premium-button navigates to /premium which shows premium-to-credits-button navigating back. Kofi host party: promo-card and header promo-button both visible, promo-sheet opens with promo-caption (AI, cached), promo-pin-button present and clicking it with 0 credits correctly redirects to /credits. test@ non-host party page shows share-party-button and clicking it shows 'Party link copied' toast. /r/ABC123 while logged in lands on feed without crash. No console errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "backend_test.py::test_join_party_with_role / test_free_join_limit_402 / test_store_tier_header_elevates", "issue": "Pre-existing/environmental: several demo London parties are now at capacity (e.g. party_e19aaf55c089 20/20, party_e9a49386c2c0 15/15, party_ef043a43df8e 10/10, party_663df90492b9 10/10). A fresh registered user cannot complete 3 successful joins because the first joinable listings return 400 'Party is full'. Not caused by iter-6; triggered by cumulative seed+test attendees over 6 iterations."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "backend_test_summary": {
+    "new_suite": "/app/backend/tests/test_credits_marketing.py — 15/15 passed",
+    "regression": "test_new_features.py 8/8 pass, test_live_features.py 18/18 pass, backend_test.py 24 pass / 1 skip / 3 fail (demo capacity full — pre-existing)",
+    "junit": ["/app/test_reports/pytest/pytest_credits.xml", "/app/test_reports/pytest/pytest_regression.xml"]
+  },
+  "frontend_acceptance_results": {
+    "credits_flow": {"credits_row": true, "profile_credits": "0", "credits_balance": "0", "pack_prices": {"shot": "£1.00", "round": "£2.00", "bottle": "£5.00"}, "buy_label": "Buy 10 credits for £1.00", "stripe_redirect": "checkout.stripe.com/c/pay/cs_test_...", "referral_code_len": 6},
+    "credits_premium_toggle": {"credits_to_premium_button": true, "premium_to_credits_button": true, "round_trip_ok": true},
+    "promo_flow_host_kofi": {"promo_card": true, "promo_button_header": true, "promo_sheet": true, "promo_caption": "loaded (via /parties/{id}/promo cached call)", "promo_pin_button": true, "pin_with_0_credits_redirects_to_credits": true},
+    "share_party_nonhost": {"share_party_button": true, "copy_toast": "Party link copied"},
+    "referral_deeplink": {"url": "/r/ABC123", "crashed": false, "landed_on": "/"}
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_credits_marketing.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/test_live_features.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_credits.xml",
+    "/app/test_reports/pytest/pytest_regression.xml"
+  ],
+  "action_items": [
+    "No functional issues with iter-6 features. All credits, referral, promote, promo caption, security headers, rate limit (429 w/ Retry-After), magic-byte photo validation, and UI flows (credits screen, promo sheet pin→credits route, non-host share-party toast, /r/<code> deeplink) are verified end-to-end.",
+    "Pre-existing environmental cleanup only (optional): the London demo parties are reaching capacity across iterations which flakes backend_test.py's free-tier 3-joins-per-day assertions. Consider resetting the demo attendee lists or adding more seeded parties with higher capacity so free-tier limit tests remain deterministic."
+  ],
+  "critical_code_review_comments": [
+    "server.py checkout (1087-1108) correctly 400s when both plan and pack are absent, and 400s on non-http(s) origin (javascript: scheme). grant_if_paid (1111-1123) is idempotent (processed flag) and adds pack credits only once per session_id — verified.",
+    "server.py spend_credits (244-249) does an atomic $inc with {credits:{$gte:amount}} filter — correct race-free spend; raises 402 with 'Needs X credits' message matching the PRD.",
+    "server.py do_join (838-845) applies the 3/day free limit only when not invited and spends 2 credits when use_credits=true, otherwise 402 with 'credits' in the message — verified in TestJoinWithCredits.",
+    "server.py party_view (795) sorts promoted parties first (promoted bool key, then super host), confirmed in TestPromote::test_fresh_host_promote_success_and_sort where the newly promoted party is index 0 of the city feed.",
+    "server.py security_middleware (1254-1275) implements a per-IP sliding window on /api/auth/, /api/me/photo, /api/payments/, /api/reports, /api/me/verify-age with 429 + Retry-After, and sets X-Frame-Options=DENY, X-Content-Type-Options=nosniff, Referrer-Policy=no-referrer, Strict-Transport-Security=max-age=31536000 on every response — all verified.",
+    "server.py photo upload (562-563) requires magic bytes PNG/JPEG/WEBP/HEIC — b'hello' with image/png content-type correctly 400s with 'valid image'.",
+    "credits.tsx (54-63) uses window.location.origin on web for origin_url and window.location.assign to redirect to Stripe URL on web — confirmed as a top-level navigation to checkout.stripe.com in tests.",
+    "marketing.tsx PromoSheet (32-44) catches ApiError 402 from /promote and routes the user to /credits with the server message — confirmed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_credits_marketing.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% on iter-6 new features (15/15); 100% on test_new_features (8/8) and test_live_features (18/18); 89% on backend_test.py (24/27, 3 environmental fails due to demo-party capacity)",
+    "frontend": "100% (5/5 acceptance checks)"
+  },
+  "seed_data_creation": "Several test_<uuid>@afterparty.app users registered via /api/auth/register. One fresh host created a party in a unique city (TestTown-<hex>) in London for the promote-sort test (that party is promoted for 24h). Credits were granted to these transient users via the normal referral flow (no DB tampering).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Several London demo parties (party_e19aaf55c089, party_e9a49386c2c0, party_ef043a43df8e, party_663df90492b9) are now at full capacity, which causes backend_test.py's 3-join-limit test (test_free_join_limit_402) and the X-Store-Tier premium-elevation test (test_store_tier_header_elevates) to fail with 400 'Party is full' on the first joins. The iter-6 test_credits_marketing.py suite handles this by looping joins and only skipping when fewer than 3 can succeed. If regression on backend_test.py is required, reset demo attendees or seed more London parties. Rate limiter is per-IP across all /api/auth/*, so run tests one suite at a time with a 60-90s cooldown; the credits suite completes in ~70s single-worker (xdist parallel can trigger 429 cascades across fixtures that log in demo users)."
+}

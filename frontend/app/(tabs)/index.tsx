@@ -113,6 +113,7 @@ function PartyCard({ p, index, onPress }: { p: Party; index: number; onPress: ()
         <View style={s.coverTop}>
           <View style={s.timePill}><Ionicons name="time" size={12} color={colors.onBrandSecondary} /><Text style={s.timeText}>{formatStart(p.starts_at)}</Text></View>
           <View style={s.vibePill}><Text style={s.vibeText}>{p.vibe}</Text></View>
+          {p.promoted && <View style={[s.vibePill, { backgroundColor: colors.gold }]} testID={`promoted-${p.party_id}`}><Text style={[s.vibeText, { color: colors.onGold }]}>PROMOTED</Text></View>}
         </View>
         <View style={s.coverBottom}>
           <Text style={s.cardTitle} numberOfLines={1}>{p.title}</Text>

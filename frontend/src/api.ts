@@ -41,7 +41,7 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
 export type User = {
   user_id: string; name: string; picture?: string | null; city: string; bio: string; age?: number | null;
   vibes: string[]; tier: "free" | "premium" | "super"; verified: boolean; boosted: boolean; email?: string;
-  tier_expires?: string | null; rating_avg?: number | null; rating_count?: number; age_verified?: boolean;
+  tier_expires?: string | null; rating_avg?: number | null; rating_count?: number; age_verified?: boolean; credits?: number;
 };
 
 export type Party = {
@@ -51,7 +51,7 @@ export type Party = {
   is_host: boolean; attending: boolean; my_role: string | null; address: string | null;
   can_see_attendees: boolean; attendees: (User & { role: string; checked_in: boolean })[]; attendee_pics: (string | null)[];
   lat: number | null; lng: number | null; distance_km: number | null; invite_code: string | null;
-  started: boolean; checked_in_count: number;
+  started: boolean; checked_in_count: number; promoted: boolean;
 };
 
 export const wsUrl = (path: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL!.replace(/^http/, "ws")}/api${path}`;
@@ -60,6 +60,8 @@ export const wsUrl = (path: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL!.r
 export const resolveUri = (uri?: string | null) => (!uri ? uri : uri.startsWith("/") ? `${process.env.EXPO_PUBLIC_BACKEND_URL}${uri}` : uri);
 
 export const inviteLink = (code: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL}/invite/${code}`;
+export const referralLink = (code: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL}/r/${code}`;
+export const partyLink = (id: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL}/party/${id}`;
 
 export async function uploadPhoto(file: { uri: string; name: string; type: string }): Promise<User> {
   const form = new FormData();

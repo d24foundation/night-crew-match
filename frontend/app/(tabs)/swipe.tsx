@@ -44,16 +44,18 @@ export default function Swipe() {
         qc.invalidateQueries({ queryKey: ["chats"] });
       }
     } catch (e) {
-      if (e instanceof ApiError && e.status === 402) { toast(e.message, "err"); router.push("/premium"); }
+      if (e instanceof ApiError && e.status === 402) { toast(e.message, "err"); router.push(e.message.includes("credits") ? "/credits" : "/premium"); }
       else toast((e as Error).message, "err");
       throw e;
     }
   };
 
   const boost = async () => {
-    if (user?.tier === "free") { router.push("/premium"); return; }
-    try { await api("/me/boost", { method: "POST" }); await refresh(); toast("Boosted for 60 min — you're top of the deck"); }
-    catch (e) { toast((e as Error).message, "err"); }
+    try { await api("/me/boost", { method: "POST" }); await refresh(); toast(user?.tier === "free" ? "Boosted for 60 min (5 credits) — you're top of the deck" : "Boosted for 60 min — you're top of the deck"); }
+    catch (e) {
+      toast((e as Error).message, "err");
+      if (e instanceof ApiError && e.status === 402) router.push("/credits");
+    }
   };
 
   return (

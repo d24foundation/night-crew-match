@@ -9,6 +9,7 @@ import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 
 import { useAuth } from "@/src/auth";
 import { dobToIso, formatDob } from "@/src/age";
+import { storage } from "@/src/utils/storage";
 import { Btn, Ionicons, Wordmark } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -81,7 +82,9 @@ export default function Login() {
       else {
         const iso = dobToIso(dob);
         if (!iso) { setErr("Enter your birthday as DD/MM/YYYY"); return; }
-        await register(name.trim(), email.trim(), password, iso);
+        const ref = await storage.getItem<string | null>("pending_ref", null);
+        await register(name.trim(), email.trim(), password, iso, ref);
+        if (ref) storage.removeItem("pending_ref");
       }
     } catch (e) {
       setErr((e as Error).message);

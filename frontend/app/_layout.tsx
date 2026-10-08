@@ -11,6 +11,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { AgeGate } from "@/src/age";
+import { storage } from "@/src/utils/storage";
 import { queryClient } from "@/src/query-client";
 import { AuthProvider, useAuth } from "@/src/auth";
 import { initializeRevenueCat, SubscriptionProvider } from "@/src/revenuecat";
@@ -47,18 +48,22 @@ try {
 function Gate() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  // Invite links opened while logged out: remember the code and land on it after login.
+  // Invite / party / referral links opened while logged out: remember them and land there after login.
   const url = Linking.useURL();
-  const pendingInvite = useRef<string | null>(null);
+  const pendingRoute = useRef<string | null>(null);
   useEffect(() => {
-    const m = url?.match(/\/invite\/([A-Za-z0-9_-]+)/);
-    if (m) pendingInvite.current = m[1];
+    const inv = url?.match(/\/invite\/([A-Za-z0-9_-]+)/);
+    const party = url?.match(/\/party\/(party_[A-Za-z0-9]+)/);
+    const ref = url?.match(/\/r\/([A-Za-z0-9]+)/);
+    if (inv) pendingRoute.current = `/invite/${inv[1]}`;
+    else if (party) pendingRoute.current = `/party/${party[1]}`;
+    if (ref) storage.setItem("pending_ref", ref[1].toUpperCase());
   }, [url]);
   useEffect(() => {
-    if (user && pendingInvite.current) {
-      const code = pendingInvite.current;
-      pendingInvite.current = null;
-      setTimeout(() => router.replace(`/invite/${code}`), 0);
+    if (user && pendingRoute.current) {
+      const route = pendingRoute.current;
+      pendingRoute.current = null;
+      setTimeout(() => router.replace(route as any), 0);
     }
   }, [user, router]);
   if (loading) {
@@ -86,6 +91,8 @@ function Gate() {
         <Stack.Screen name="edit-profile" options={{ presentation: "modal" }} />
         <Stack.Screen name="invite/[code]" options={{ presentation: "modal" }} />
         <Stack.Screen name="party/scan/[id]" options={{ presentation: "modal" }} />
+        <Stack.Screen name="credits" options={{ presentation: "modal" }} />
+        <Stack.Screen name="r/[code]" />
       </Stack.Protected>
     </Stack>
     </>

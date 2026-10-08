@@ -37,6 +37,10 @@ Mobile app that connects people for after-parties when clubs close (or during th
 - Profile photos: POST /api/me/photo → Emergent object storage, served via GET /api/files/{id}; picker sheet (library/camera with Settings nudge) on Profile + Edit profile; Avatar resolves relative URLs
 - Invite links: GET /parties/{id}/invite (host), GET /invites/{code}, POST /invites/{code}/accept (bypasses free join limit); /invite/[code] landing screen, share via Share sheet (clipboard on web); pending invite preserved through login
 - Safety: block/unblock/report endpoints; blocked users hidden from discover, matches, chats, feed, messages; SafetySheet on swipe, match chat header, party chat long-press, party detail; Blocked users list in Profile
+- Live chat: WebSocket /api/ws/chats/{id} (messages + typing), polling fallback; Party ratings (host trust score); Check-in QR door passes + host scanner; 18+ age verification (DOB at signup, AgeGate for social logins)
+- Credits economy (GBP one-off via Stripe): £1=10, £2=25, £5=70; spend on boost (5), extra join (2), promote party (10); ledger at /credits
+- Marketing: referral codes (+5 credits each side, /r/<code>), AI promo captions (/parties/{id}/promo), one-tap share, paid party promotion pinned to feed top
+- Security: per-IP rate limits on auth/upload/payments/reports (429), security headers (HSTS, nosniff, DENY, Referrer-Policy), image magic-byte validation, origin validation on checkout, atomic credit debits
 
 ## Backlog
 - P0: Push notifications (need google-services.json)

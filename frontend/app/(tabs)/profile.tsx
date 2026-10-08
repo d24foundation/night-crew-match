@@ -55,6 +55,16 @@ export default function Profile() {
       </Pressable>
 
       <View style={s.card}>
+        <Pressable testID="credits-row" onPress={() => router.push("/credits")} style={s.row}>
+          <Ionicons name="ticket-outline" size={18} color={colors.gold} />
+          <Text style={s.rowText}>Credits · <Text style={{ color: colors.gold, fontWeight: "900" }} testID="profile-credits">{user.credits ?? 0}</Text> — top up from £1</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
+        <Pressable testID="referral-row" onPress={() => router.push("/credits")} style={s.row}>
+          <Ionicons name="gift-outline" size={18} color={colors.gold} />
+          <Text style={s.rowText}>Invite friends — you both get 5 free credits</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
         <Row icon="mail-outline" label={user.email ?? ""} />
         <Row icon="shield-checkmark-outline" label="Safety: meet in groups, share your location with a friend" />
         <Pressable testID="blocked-users-row" onPress={() => setBlocksOpen(true)} style={s.row}>

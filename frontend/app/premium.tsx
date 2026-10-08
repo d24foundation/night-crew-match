@@ -129,6 +129,9 @@ export default function Premium() {
           <Text style={s.link}>{sub.isRestoring ? "Restoring..." : "Restore purchases"}</Text>
         </Pressable>
         <Text style={s.fine}>Monthly, cancel anytime. Card payments give 30 days access.</Text>
+        <Pressable testID="premium-to-credits-button" onPress={() => router.push("/credits")} style={{ alignItems: "center", padding: 8 }}>
+          <Text style={s.link}>Not ready to subscribe? Buy credits from £1</Text>
+        </Pressable>
       </ScrollView>
 
       <Modal visible={!!confirm} transparent animationType="fade" onRequestClose={() => setConfirm(null)}>
