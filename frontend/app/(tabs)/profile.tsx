@@ -92,6 +92,7 @@ export default function Profile() {
       </View>
 
       <Btn testID="logout-button" title="Log out" variant="ghost" icon="log-out-outline" onPress={logout} />
+      {user.is_admin && <Btn testID="admin-button" title="Admin panel" variant="ghost" icon="construct-outline" onPress={() => router.push("/admin")} />}
       {photo.ui}
       <BlockedSheet visible={blocksOpen} onClose={() => setBlocksOpen(false)} />
     </ScrollView>

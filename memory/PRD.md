@@ -49,6 +49,7 @@ Mobile app that connects people for after-parties when clubs close (or during th
 - RevenueCat: 7-day free trial (P1W) on both annual packages; paywall shows "7 DAYS FREE" + trial banner
 - Split the bill: /chats/{party}/bills CRUD, equal split, pay share via Stripe → creator wallet (no fee), cash mark-paid, ws "bill" refresh; BillsSheet in party chats
 - Host ID verification: /me/verify-host (ID + selfie → private storage), admin review via x-admin-secret (ADMIN_SECRET in backend/.env), host_verified shield on parties; /verify-host screen
+- Admin panel (/admin, admins = ADMIN_EMAILS in backend/.env or is_admin flag; x-admin-secret still works server-side): KPIs & revenue by source, host ID review with private image viewer, report moderation (dismiss/warn/suspend; suspended accounts are blocked at auth)
 
 ## Backlog
 - P0: Push notifications (need google-services.json)

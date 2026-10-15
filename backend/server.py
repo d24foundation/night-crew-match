@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadFile, File, WebSocket, WebSocketDisconnect, Header
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -166,6 +166,7 @@ def public_user(u: dict, me: bool = False) -> dict:
         out["age_verified"] = bool(u.get("age_verified"))
         out["credits"] = int(u.get("credits", 0))
         out["host_verification_status"] = (u.get("host_verification") or {}).get("status")
+        out["is_admin"] = is_admin(u)
     return out
 
 
@@ -288,6 +289,8 @@ async def current_user(request: Request) -> dict:
     u = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0})
     if not u:
         raise HTTPException(401, "User not found")
+    if u.get("suspended"):
+        raise HTTPException(403, "Your account is suspended. Contact support@afterparty.app")
     # In-app (RevenueCat) entitlement reported by the client SDK
     st = request.headers.get("X-Store-Tier")
     if st in PLANS:
@@ -853,12 +856,47 @@ async def submit_host_verification(id_document: UploadFile = File(...), selfie: 
     return public_user(u, True)
 
 
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+
+def is_admin(u: dict) -> bool:
+    return bool(u.get("is_admin")) or (u.get("email") or "").lower() in ADMIN_EMAILS
+
+
+async def admin_user(request: Request, authorization: Optional[str] = Header(None)):
+    """Admin access: either a logged-in admin account (JWT) or the server-side x-admin-secret header."""
+    if ADMIN_SECRET and request.headers.get("x-admin-secret") == ADMIN_SECRET:
+        return {"user_id": "secret", "name": "Admin"}
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            payload = jwt.decode(authorization[7:], JWT_SECRET, algorithms=["HS256"])
+            u = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0})
+            if u and is_admin(u):
+                return u
+        except Exception:
+            pass
+    raise HTTPException(403, "Admins only")
+
+
 @api.get("/admin/host-verifications")
-async def admin_list_verifications(request: Request):
-    if not ADMIN_SECRET or request.headers.get("x-admin-secret") != ADMIN_SECRET:
-        raise HTTPException(403, "Forbidden")
-    docs = await db.users.find({"host_verification.status": "pending"}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "host_verification": 1}).to_list(200)
+async def admin_list_verifications(a=Depends(admin_user)):
+    docs = await db.users.find({"host_verification.status": "pending"}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "picture": 1, "city": 1, "age": 1, "host_verification": 1}).sort("host_verification.submitted_at", 1).to_list(200)
+    for d in docs:
+        d["host_verification"] = {k: v for k, v in d["host_verification"].items() if k != "docs"}
     return docs
+
+
+@api.get("/admin/host-verifications/{user_id}/{label}")
+async def admin_kyc_image(user_id: str, label: Literal["id_document", "selfie"], a=Depends(admin_user)):
+    """Streams a private KYC image to an admin — never public, never cached."""
+    u = await db.users.find_one({"user_id": user_id}, {"_id": 0, "host_verification": 1})
+    path = ((u or {}).get("host_verification") or {}).get("docs", {}).get(label)
+    if not path:
+        raise HTTPException(404, "Not found")
+    resp = await run_in_threadpool(get_object, path)
+    if resp.status_code >= 400:
+        raise HTTPException(404, "Not found")
+    return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"), headers={"Cache-Control": "no-store"})
 
 
 class ReviewIn(BaseModel):
@@ -867,17 +905,70 @@ class ReviewIn(BaseModel):
 
 
 @api.post("/admin/host-verifications/{user_id}")
-async def admin_review_verification(user_id: str, body: ReviewIn, request: Request):
-    if not ADMIN_SECRET or request.headers.get("x-admin-secret") != ADMIN_SECRET:
-        raise HTTPException(403, "Forbidden")
+async def admin_review_verification(user_id: str, body: ReviewIn, a=Depends(admin_user)):
     status = "approved" if body.approve else "rejected"
     res = await db.users.update_one({"user_id": user_id, "host_verification.status": "pending"},
-                                    {"$set": {"host_verification.status": status, "host_verification.reviewed_at": iso(now()), "host_verification.note": body.note}})
+                                    {"$set": {"host_verification.status": status, "host_verification.reviewed_at": iso(now()), "host_verification.note": body.note, "host_verification.reviewed_by": a["user_id"]},
+                                     "$unset": {"host_verification.docs": ""}})
     if not res.matched_count:
         raise HTTPException(404, "No pending verification for that user")
     await notify([user_id], {"title": "You're a verified host ✅" if body.approve else "Host verification needs another look",
                              "message": "Guests now see the verified badge on your parties." if body.approve else (body.note or "Please resubmit clearer photos of your ID and a selfie."), "action_url": "/profile"})
     return {"status": status}
+
+
+@api.get("/admin/reports")
+async def admin_reports(status: Literal["open", "resolved", "all"] = "open", a=Depends(admin_user)):
+    q = {} if status == "all" else {"status": status}
+    reps = await db.reports.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+    ids = {r["reporter_id"] for r in reps} | {r["target_id"] for r in reps}
+    users = {x["user_id"]: public_user(x) for x in await db.users.find({"user_id": {"$in": list(ids)}}, {"_id": 0}).to_list(500)}
+    for r in reps:
+        r["reporter"] = users.get(r["reporter_id"])
+        r["target"] = users.get(r["target_id"])
+        r["target_report_count"] = await db.reports.count_documents({"target_id": r["target_id"]})
+    return reps
+
+
+class ResolveIn(BaseModel):
+    action: Literal["dismiss", "warn", "suspend"]
+    note: str = Field("", max_length=200)
+
+
+@api.post("/admin/reports/{report_id}/resolve")
+async def admin_resolve_report(report_id: str, body: ResolveIn, a=Depends(admin_user)):
+    r = await db.reports.find_one({"report_id": report_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Report not found")
+    await db.reports.update_one({"report_id": report_id}, {"$set": {"status": "resolved", "action": body.action, "note": body.note, "resolved_at": iso(now()), "resolved_by": a["user_id"]}})
+    if body.action == "suspend":
+        await db.users.update_one({"user_id": r["target_id"]}, {"$set": {"suspended": True, "suspended_at": iso(now())}})
+    elif body.action == "warn":
+        await notify([r["target_id"]], {"title": "A note from After Party", "message": body.note or "We received a report about your behaviour. Please keep it respectful — repeat reports lead to suspension.", "action_url": "/profile"})
+    return {"status": "resolved", "action": body.action}
+
+
+@api.post("/admin/users/{user_id}/unsuspend")
+async def admin_unsuspend(user_id: str, a=Depends(admin_user)):
+    await db.users.update_one({"user_id": user_id}, {"$unset": {"suspended": "", "suspended_at": ""}})
+    return {"ok": True}
+
+
+@api.get("/admin/stats")
+async def admin_stats(a=Depends(admin_user)):
+    since7 = iso(now() - timedelta(days=7))
+    paid = await db.payment_transactions.find({"payment_status": "paid"}, {"_id": 0, "amount": 1, "kind": 1, "created_at": 1}).to_list(5000)
+    return {
+        "users": await db.users.count_documents({}), "new_users_7d": await db.users.count_documents({"created_at": {"$gte": since7}}),
+        "parties_upcoming": await db.parties.count_documents({"starts_at": {"$gte": iso(now())}}),
+        "parties_7d": await db.parties.count_documents({"created_at": {"$gte": since7}}),
+        "subscribers": await db.users.count_documents({"tier": {"$in": ["premium", "super"]}, "tier_expires": {"$gte": iso(now())}}),
+        "revenue_total": round(sum(p["amount"] for p in paid), 2), "revenue_7d": round(sum(p["amount"] for p in paid if p["created_at"] >= since7), 2),
+        "revenue_by_kind": {k: round(sum(p["amount"] for p in paid if p.get("kind", "plan") == k), 2) for k in ("plan", "credits", "chipin", "bill")},
+        "pending_verifications": await db.users.count_documents({"host_verification.status": "pending"}),
+        "open_reports": await db.reports.count_documents({"status": "open"}),
+        "suspended": await db.users.count_documents({"suspended": True}),
+    }
 
 
 @api.post("/me/boost")

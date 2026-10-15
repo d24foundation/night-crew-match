@@ -94,6 +94,7 @@ function Gate() {
         <Stack.Screen name="credits" options={{ presentation: "modal" }} />
         <Stack.Screen name="wallet" options={{ presentation: "modal" }} />
         <Stack.Screen name="verify-host" options={{ presentation: "modal" }} />
+        <Stack.Screen name="admin" />
         <Stack.Screen name="r/[code]" />
       </Stack.Protected>
     </Stack>

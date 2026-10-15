@@ -42,7 +42,7 @@ export type User = {
   user_id: string; name: string; picture?: string | null; city: string; bio: string; age?: number | null;
   vibes: string[]; tier: "free" | "premium" | "super"; verified: boolean; boosted: boolean; email?: string;
   tier_expires?: string | null; rating_avg?: number | null; rating_count?: number; age_verified?: boolean; credits?: number;
-  host_verified?: boolean; host_verification_status?: "pending" | "approved" | "rejected" | null;
+  host_verified?: boolean; host_verification_status?: "pending" | "approved" | "rejected" | null; is_admin?: boolean;
 };
 
 export type Party = {
