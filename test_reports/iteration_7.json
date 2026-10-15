@@ -1,0 +1,67 @@
+{
+  "summary": "Iter-7 verification of host-payouts, chip-in checkout, smart reminders and weekend streaks. NEW SUITE /app/backend/tests/test_payouts_streaks_reminders.py — 13/13 PASS. FULL REGRESSION: 82 tests, 81 pass + 1 flaky-rate-limit test (test_credits_marketing::test_invalid_ref_ignored passed on retry — pre-existing). Backend verified: GET /wallet shape (balance float, fee_pct=10, min_payout=5.0, ledger[], payout_method); PUT /wallet/payout-method bank 'Test User' '12-34-56 12345678' → details_masked ends '5678' with bullets, persisted in GET /wallet; details length 2 → 422; POST /wallet/payout with balance 0 → 400 'Minimum payout is £5.00…'. Chip-in checkout: for test@ attended party with chip_in>0 → 200 url contains checkout.stripe.com; non-attended → 403; party_id='party_nope' → 404. party_view fields: non-host sees my_paid/paid_count and collected=null; kofi (host) sees collected as number and paid_count int. Smart reminders: kofi created party +30 min appears in /reminders/upcoming with minutes_until≈30; +5h party NOT included. Weekend streaks: fresh user initial {current:0,best:0,nights:0,next_reward:1,4 badges all locked}; kofi hosts party on last Saturday 23:00 UTC → fresh user joins (chipin) → fetches ticket → kofi checks in using QR → streak now {current:1,best:1,nights:1}, badge-1 unlocked, credits balance=1 with ledger reason='streak'. Idempotent re-check-in and rating same party do NOT add a 2nd night. Wednesday-starting party check-in records NO night (weekday). FRONTEND (390x844): login test@ → /profile shows streak-card with streak-current '0 weekends in a row' + badge-1/3/6/10 all rendered + wallet-row visible → /wallet shows wallet-balance '£0.00', payout-method-row opens payout-method-sheet (method-bank/paypal/revolut, payout-name-input, payout-details-input, payout-save-button). Selected paypal, saved 'TEST Payer' + 'me@paypal.com' → 'Payout details saved' toast + row shows masked '•••••••••.com PayPal'. /premium cycle-monthly → premium='£3.99/mo', super='£7.99/mo'; cycle-annual → '£29.99/yr' and '£59.99/yr'; back to monthly works; manage-subscription-button NOT present on web. Reminder banner on feed: created kofi party +30 min, joined as test@ via API, feed /→ reminder-banner visible with reminder-when='Starts in 29 min' and reminder-directions-button present. Party page as test@ guest: chipin-card + pay-chipin-button visible; click → navigates to checkout.stripe.com/c/pay/cs_test_ (never completed). As kofi on his own party with chip_in>0: collected-card visible, pay-chipin-button NOT present; clicking collected-card navigates to /wallet (Host wallet screen).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "test_credits_marketing.py::TestReferralAndBoost::test_invalid_ref_ignored", "issue": "Pre-existing: when a prior test burst recently hit the auth rate-limit (20/min per-IP), the subsequent GET /auth/me inside _register_fresh can return 429 JSON which has no 'credits' key → KeyError. Not an iter-7 regression; passes immediately on retry. Suggest the test helper handle 429 on the follow-up GET too."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "backend_test_summary": {
+    "new_suite": "/app/backend/tests/test_payouts_streaks_reminders.py — 13/13 PASS",
+    "regression": "backend/tests (all suites): 81 pass, 1 flaky pass on retry (test_credits_marketing::test_invalid_ref_ignored, rate-limit side effect)",
+    "junit": [
+      "/app/test_reports/pytest/pytest_payouts_streaks.xml",
+      "/app/test_reports/pytest/pytest_regression.xml"
+    ]
+  },
+  "frontend_acceptance_results": {
+    "profile_streak": {"streak_card": true, "streak_current": "0 weekends in a row", "badges_rendered": [1, 3, 6, 10]},
+    "wallet_screen": {"wallet_balance": "£0.00", "payout_method_sheet_opens": true, "paypal_save_toast": "Payout details saved", "row_masked": "•••••••••.com (ends .com — correct masking)"},
+    "premium_cycle_toggle": {"monthly": {"premium": "£3.99/mo", "super": "£7.99/mo"}, "annual": {"premium": "£29.99/yr", "super": "£59.99/yr"}, "manage_subscription_on_web": false},
+    "chipin_guest": {"chipin_card": true, "pay_chipin_button": true, "stripe_redirect": "checkout.stripe.com/c/pay/cs_test_..."},
+    "chipin_host": {"collected_card": true, "pay_chipin_button_present": false, "nav_target": "/wallet"},
+    "reminder_banner": {"visible": true, "reminder_when": "Starts in 29 min", "directions_button": true}
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_payouts_streaks_reminders.py (new)",
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/test_live_features.py",
+    "/app/backend/tests/test_credits_marketing.py",
+    "/app/test_reports/pytest/pytest_payouts_streaks.xml",
+    "/app/test_reports/pytest/pytest_regression.xml"
+  ],
+  "action_items": [
+    "No functional issues with iter-7 features. Wallet, chip-in checkout, reminders, and streak logic all work end-to-end including badge unlock + streak credit grant on first weekend check-in.",
+    "(Minor, pre-existing) /app/backend/tests/test_credits_marketing.py::TestReferralAndBoost::test_invalid_ref_ignored line 173-174 can race with 20/min auth rate-limit: add a 429-aware retry wrapper around GET /auth/me (or sleep a few seconds before the GET)."
+  ],
+  "critical_code_review_comments": [
+    "server.py weekend_key (213-222) correctly treats Fri/Sat/Sun as the same weekend and extends into Mon <06:00 UTC — verified by Wednesday party yielding None and Saturday 23:00 UTC yielding the Friday ISO date.",
+    "server.py record_night_out (239-254) is idempotent per (user_id, weekend) via upsert + existing short-circuit; rewards min(current, 5) credits with reason='streak' and emits a push with badge name on 1/3/6/10 — verified: nights stays at 1 after idempotent check-in and after rating.",
+    "server.py checkin (597-617) calls record_night_out only on first check-in (att['checked_in_at'] is set before record), so repeat scans return already=true without a second night — verified.",
+    "server.py checkout (1184-1217) chip-in branch correctly 403s non-attendees, 400s when paid_at is set or chip_in<=0, and 404s unknown party; returns a real Stripe test session URL in GBP — verified.",
+    "server.py wallet (1264-1294): GET /wallet balance/earned rounded to 2dp, fee_pct=10, min_payout=5.0, masked payout_method output; PUT accepts {bank,paypal,revolut} and uses Pydantic min_length validation (details >= 4) → 422 for '12'; POST /wallet/payout returns 400 'Minimum payout…' when balance < 5 and 400 when no method; atomic $inc on wallet_balance prevents double-payout. Looks correct.",
+    "server.py reminder_loop (257-270) is background-only (not covered by HTTP tests); GET /reminders/upcoming (737-749) correctly filters to [now-45m, now+90m] window and attaches minutes_until — verified by API test.",
+    "frontend/app/wallet.tsx uses correct testIDs for every interactive element (wallet-balance, payout-button, payout-method-row, payout-method-sheet, method-{bank|paypal|revolut}, payout-name-input, payout-details-input, payout-save-button, wallet-empty). payout-save-button is disabled until name.trim()≥2 && details.trim()≥4 which matches server validation.",
+    "frontend/app/premium.tsx cycle toggle (lines 103-109, 125) renders '/yr' when cycle==='annual' and the plan prices (£29.99 premium, £59.99 super) are the fallback test-store prices — matches PRD. manage-subscription-button is gated behind !isWeb (verified NOT present on web).",
+    "frontend/src/reminders.tsx reminder-banner (line 33), reminder-when (37), reminder-directions-button (42) render correctly from /reminders/upcoming; directions open maps for the party coords.",
+    "frontend/src/streak.tsx renders streak-card, streak-current, badge-{at} elements with unlocked styling driven by GET /me/streak — matches design."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_payouts_streaks_reminders.py (new, 13 tests)"
+  ],
+  "success_rate": {
+    "backend": "100% on iter-7 new features (13/13); 98.8% on full regression (81/82 clean + 1 flaky pass on retry — pre-existing rate-limit race)",
+    "frontend": "100% (6/6 acceptance checks: streak-card, wallet masked payout, premium cycle toggle, chipin guest redirect, host collected-card, reminder-banner)"
+  },
+  "seed_data_creation": "Several transient test_<uuid>@afterparty.app registered users (dob 1995-01-01, 1998-01-01). kofi created ~5 TEST_* parties: one future +30 min (used by both reminder-API test and UI reminder-banner), one far +5h, one on last Saturday 23:00 UTC (streak), one on last Wednesday 22:00 UTC (negative streak), plus the UI test party at +30 min with chip_in=10 that test@ joined (party_id persisted in /tmp/testparty.json during the frontend step). Nights, wallet_ledger and credit_ledger entries were created by the streak flow — all are TEST_ prefixed for easy cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Rate limit: /api/auth/* is 20/min per-IP; when running the full suite add a cooldown between suites or wrap /auth/me retries in test helpers. Many TEST_* parties on London accumulate across iterations — capacity-sensitive tests should use fresh demo-tier (super) users like maya@ or create their own fresh host. Stripe is in test mode — do NOT complete payment flows in UI tests. The reminder background loop and push notifications are not covered by HTTP tests."
+}

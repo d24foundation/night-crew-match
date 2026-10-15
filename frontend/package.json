@@ -48,6 +48,7 @@
     "react-native-keyboard-controller": "1.21.9",
     "react-native-maps": "1.27.2",
     "react-native-purchases": "10.11.0",
+    "react-native-purchases-ui": "10.14.0",
     "react-native-qrcode-svg": "6.3.26",
     "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "5.7.0",

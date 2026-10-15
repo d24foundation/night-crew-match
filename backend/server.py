@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadF
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from dotenv import load_dotenv
+import asyncio
 import math
 import secrets
 import requests
@@ -41,6 +42,9 @@ PLANS = {"premium": 3.99, "super": 7.99}
 # One-off credit packs (GBP): price -> credits. Credits unlock boosts, extra joins and party promotion without a subscription.
 CREDIT_PACKS = {"shot": {"price": 1.00, "credits": 10, "label": "Shot"}, "round": {"price": 2.00, "credits": 25, "label": "Round"}, "bottle": {"price": 5.00, "credits": 70, "label": "Bottle"}}
 COST_BOOST, COST_EXTRA_JOIN, COST_PROMOTE, REFERRAL_REWARD = 5, 2, 10, 5
+PLATFORM_FEE = 0.10          # 10% of chip-ins kept by After Party; the rest lands in the host's wallet
+MIN_PAYOUT = 5.00            # GBP
+STREAK_BADGES = [(1, "First Night", "moon"), (3, "Regular", "flame"), (6, "Legend", "trophy"), (10, "Nocturnal", "planet")]
 FREE_JOINS_PER_DAY = 3
 FREE_LIKES_PER_DAY = 25
 COVERS = [
@@ -203,6 +207,67 @@ async def notify(recipients: List[str], data: dict):
         await send_push(recipients, data)
     except Exception as e:
         logger.warning("Push failed (non-blocking): %s", e)
+
+
+# ---------------- Weekend streaks ----------------
+def weekend_key(dt: datetime) -> Optional[str]:
+    """Friday date of the weekend this night belongs to (Fri → Mon 06:00), or None for a weekday night."""
+    wd = dt.weekday()
+    if wd in (4, 5, 6):
+        fri = dt.date() - timedelta(days=wd - 4)
+    elif wd == 0 and dt.hour < 6:
+        fri = dt.date() - timedelta(days=3)
+    else:
+        return None
+    return fri.isoformat()
+
+
+def streak_from_keys(keys: List[str]) -> tuple:
+    """(current, best) consecutive-weekend streaks. Current survives until the following weekend ends."""
+    days = sorted({datetime.fromisoformat(k).date() for k in keys})
+    if not days:
+        return 0, 0
+    best = cur = 1
+    for a, b in zip(days, days[1:]):
+        cur = cur + 1 if (b - a).days == 7 else 1
+        best = max(best, cur)
+    this_fri = weekend_key(now()) or (now().date() - timedelta(days=(now().weekday() - 4) % 7)).isoformat()
+    gap = (datetime.fromisoformat(this_fri).date() - days[-1]).days
+    return (cur if gap <= 7 else 0), best
+
+
+async def record_night_out(user_id: str, party: dict):
+    """Called on check-in or rating: logs the night and pays streak rewards once per weekend."""
+    key = weekend_key(parse_dt(party["starts_at"]))
+    if not key:
+        return
+    existing = await db.nights.find_one({"user_id": user_id, "weekend": key})
+    await db.nights.update_one({"user_id": user_id, "weekend": key}, {"$setOnInsert": {"party_id": party["party_id"], "created_at": iso(now())}}, upsert=True)
+    if existing:
+        return
+    keys = await db.nights.distinct("weekend", {"user_id": user_id})
+    current, _ = streak_from_keys(keys)
+    reward = min(current, 5)
+    await add_credits(user_id, reward, "streak", key)
+    badge = next((name for n, name, _ in STREAK_BADGES if n == current), None)
+    msg = f"+{reward} credits for your {current}-weekend streak" + (f" — you unlocked the {badge} badge!" if badge else ". Keep it going next weekend.")
+    await notify([user_id], {"title": f"🔥 {current} weekend{'s' if current != 1 else ''} in a row", "message": msg, "action_url": "/profile"})
+
+
+async def reminder_loop():
+    """Every 5 min: push a '1 hour to go' reminder (with directions link) to everyone going."""
+    while True:
+        try:
+            lo, hi = iso(now() + timedelta(minutes=50)), iso(now() + timedelta(minutes=70))
+            async for p in db.parties.find({"starts_at": {"$gte": lo, "$lte": hi}, "reminded_1h": {"$ne": True}}, {"_id": 0}):
+                await db.parties.update_one({"party_id": p["party_id"]}, {"$set": {"reminded_1h": True}})
+                guests = [a["user_id"] for a in p["attendees"]]
+                if guests:
+                    await notify(guests, {"title": f"{p['title']} starts in 1 hour", "message": f"Address: {p.get('address') or p['area']}. Tap for directions and the group chat.", "action_url": f"/party/{p['party_id']}"})
+                await notify([p["host_id"]], {"title": "Your afters starts in 1 hour", "message": f"{len(guests)} going to {p['title']}. Open the door scanner when they arrive.", "action_url": f"/party/{p['party_id']}"})
+        except Exception as e:
+            logger.warning("reminder loop: %s", e)
+        await asyncio.sleep(300)
 
 
 # ---------------- Auth ----------------
@@ -495,6 +560,7 @@ async def rate_party(party_id: str, body: RateIn, u=Depends(current_user)):
     await db.users.update_one({"user_id": p["host_id"]}, {"$inc": {"rating_sum": delta_sum, "rating_count": delta_n}})
     if not prev:
         await notify([p["host_id"]], {"title": f"{'⭐' * body.stars} for {p['title']}", "message": f"{u.get('name')} rated your afters {body.stars}/5", "action_url": f"/party/{party_id}"})
+        await record_night_out(u["user_id"], p)
     return {"stars": body.stars, "comment": body.comment.strip()}
 
 
@@ -547,6 +613,7 @@ async def checkin(party_id: str, body: CheckinIn, u=Depends(current_user)):
         return {"ok": True, "already": True, "guest": public_user(guest), "checked_in_at": att["checked_in_at"]}
     ts = iso(now())
     await db.parties.update_one({"party_id": party_id, "attendees.user_id": att["user_id"]}, {"$set": {"attendees.$.checked_in_at": ts}})
+    await record_night_out(att["user_id"], p)
     return {"ok": True, "already": False, "guest": public_user(guest), "checked_in_at": ts}
 
 
@@ -656,6 +723,32 @@ async def boost(u=Depends(current_user)):
     return {"boosted_until": iso(until), "credits": int(u.get("credits", 0))}
 
 
+@api.get("/me/streak")
+async def my_streak(u=Depends(current_user)):
+    keys = await db.nights.distinct("weekend", {"user_id": u["user_id"]})
+    current, best = streak_from_keys(keys)
+    this_key = weekend_key(now())
+    return {"current": current, "best": best, "nights": len(keys), "this_weekend_done": bool(this_key and this_key in keys),
+            "badges": [{"name": name, "icon": icon, "at": n, "unlocked": best >= n} for n, name, icon in STREAK_BADGES],
+            "next_reward": min(current + 1, 5)}
+
+
+# ---------------- Smart reminders ----------------
+@api.get("/reminders/upcoming")
+async def upcoming_reminders(u=Depends(current_user)):
+    """Parties I'm going to (or hosting) that start within 90 minutes or started < 45 minutes ago."""
+    lo, hi = iso(now() - timedelta(minutes=45)), iso(now() + timedelta(minutes=90))
+    q = {"starts_at": {"$gte": lo, "$lte": hi}, "$or": [{"host_id": u["user_id"]}, {"attendees.user_id": u["user_id"]}]}
+    ps = await db.parties.find(q, {"_id": 0}).sort("starts_at", 1).to_list(5)
+    hosts, users = await load_people(ps)
+    out = []
+    for p in ps:
+        v = party_view(p, u, hosts, users)
+        v["minutes_until"] = int((parse_dt(p["starts_at"]) - now()).total_seconds() // 60)
+        out.append(v)
+    return out
+
+
 # ---------------- Credits, referrals & marketing ----------------
 @api.get("/credits")
 async def credits(u=Depends(current_user)):
@@ -760,8 +853,11 @@ def party_view(p: dict, viewer: dict, hosts: dict, users: dict, me_pos: Optional
         "my_role": next((a["role"] for a in atts if a["user_id"] == uid), None),
         "address": p.get("address") if (is_host or attending) else None,
         "can_see_attendees": can_see,
-        "attendees": [dict(public_user(users[a["user_id"]]), role=a["role"], checked_in=bool(a.get("checked_in_at"))) for a in atts if a["user_id"] in users] if can_see else [],
+        "attendees": [dict(public_user(users[a["user_id"]]), role=a["role"], checked_in=bool(a.get("checked_in_at")), paid=bool(a.get("paid_at"))) for a in atts if a["user_id"] in users] if can_see else [],
         "checked_in_count": sum(1 for a in atts if a.get("checked_in_at")),
+        "paid_count": sum(1 for a in atts if a.get("paid_at")),
+        "collected": round(sum(float(a.get("paid_amount", 0)) for a in atts if a.get("paid_at")), 2) if is_host else None,
+        "my_paid": any(a["user_id"] == uid and a.get("paid_at") for a in atts),
         "started": parse_dt(p["starts_at"]) <= now(),
         "promoted": bool(p.get("promoted_until")) and parse_dt(p["promoted_until"]) > now(),
         "attendee_pics": [users[a["user_id"]].get("picture") for a in atts[:4] if a["user_id"] in users],
@@ -1076,6 +1172,7 @@ async def send_message(chat_id: str, body: MessageIn, u=Depends(current_user)):
 class CheckoutIn(BaseModel):
     plan: Optional[Literal["premium", "super"]] = None
     pack: Optional[Literal["shot", "round", "bottle"]] = None
+    party_id: Optional[str] = None  # pay the chip-in for a party you're attending
     origin_url: str
 
 
@@ -1086,13 +1183,25 @@ def stripe_client(request: Request) -> StripeCheckout:
 
 @api.post("/payments/checkout")
 async def checkout(body: CheckoutIn, request: Request, u=Depends(current_user)):
-    if not body.plan and not body.pack:
-        raise HTTPException(400, "Choose a plan or a credit pack")
+    if not body.plan and not body.pack and not body.party_id:
+        raise HTTPException(400, "Choose a plan, a credit pack or a party to pay for")
     origin = body.origin_url.rstrip("/")
     if not origin.startswith(("http://", "https://")):
         raise HTTPException(400, "Invalid origin")
     sc = stripe_client(request)
-    if body.pack:
+    if body.party_id:
+        p = await db.parties.find_one({"party_id": body.party_id}, {"_id": 0})
+        if not p:
+            raise HTTPException(404, "Party not found")
+        att = next((a for a in p["attendees"] if a["user_id"] == u["user_id"]), None)
+        if not att:
+            raise HTTPException(403, "Join the party before paying the chip-in")
+        if att.get("paid_at"):
+            raise HTTPException(400, "You've already paid for this one")
+        if p["chip_in"] <= 0:
+            raise HTTPException(400, "This party has no chip-in")
+        amount, kind, item, page = float(p["chip_in"]), "chipin", body.party_id, f"party/{body.party_id}"
+    elif body.pack:
         amount, kind, item, page = CREDIT_PACKS[body.pack]["price"], "credits", body.pack, "credits"
     else:
         amount, kind, item, page = PLANS[body.plan], "plan", body.plan, "premium"
@@ -1103,7 +1212,7 @@ async def checkout(body: CheckoutIn, request: Request, u=Depends(current_user)):
         metadata={"user_id": u["user_id"], "kind": kind, "item": item})
     s = await sc.create_checkout_session(req)
     await db.payment_transactions.insert_one({
-        "session_id": s.session_id, "user_id": u["user_id"], "kind": kind, "plan": body.plan, "pack": body.pack, "amount": amount,
+        "session_id": s.session_id, "user_id": u["user_id"], "kind": kind, "plan": body.plan, "pack": body.pack, "party_id": body.party_id, "amount": amount,
         "currency": "gbp", "payment_status": "initiated", "processed": False, "created_at": iso(now())})
     return {"url": s.url, "session_id": s.session_id}
 
@@ -1116,11 +1225,73 @@ async def grant_if_paid(session_id: str, payment_status: str):
     if payment_status == "paid":
         res = await db.payment_transactions.update_one({"session_id": session_id, "processed": False}, {"$set": {"processed": True}})
         if res.modified_count:
-            if tx.get("pack"):
+            if tx.get("party_id"):
+                await settle_chipin(tx)
+            elif tx.get("pack"):
                 await add_credits(tx["user_id"], CREDIT_PACKS[tx["pack"]]["credits"], "purchase", session_id)
             else:
                 await db.users.update_one({"user_id": tx["user_id"]}, {"$set": {"tier": tx["plan"], "tier_expires": iso(now() + timedelta(days=30))}})
     return tx
+
+
+# ---------------- Host wallet & payouts ----------------
+async def settle_chipin(tx: dict):
+    """Guest paid the chip-in: mark them paid and credit the host's wallet (minus platform fee)."""
+    p = await db.parties.find_one({"party_id": tx["party_id"]}, {"_id": 0})
+    if not p:
+        return
+    ts = iso(now())
+    await db.parties.update_one({"party_id": p["party_id"], "attendees.user_id": tx["user_id"]}, {"$set": {"attendees.$.paid_at": ts, "attendees.$.paid_amount": tx["amount"]}})
+    net = round(tx["amount"] * (1 - PLATFORM_FEE), 2)
+    await db.users.update_one({"user_id": p["host_id"]}, {"$inc": {"wallet_balance": net, "wallet_earned": net}})
+    guest = await db.users.find_one({"user_id": tx["user_id"]}, {"_id": 0, "name": 1})
+    await db.wallet_ledger.insert_one({"entry_id": new_id("w"), "user_id": p["host_id"], "amount": net, "gross": tx["amount"], "fee": round(tx["amount"] - net, 2),
+                                       "type": "chipin", "party_id": p["party_id"], "party_title": p["title"], "from_name": guest.get("name") if guest else None, "created_at": ts})
+    await notify([p["host_id"]], {"title": f"£{tx['amount']:.2f} chip-in received", "message": f"{guest.get('name') if guest else 'A guest'} paid for {p['title']}. £{net:.2f} added to your wallet.", "action_url": "/wallet"})
+
+
+class PayoutMethodIn(BaseModel):
+    method: Literal["bank", "paypal", "revolut"]
+    account_name: str = Field(min_length=2, max_length=60)
+    details: str = Field(min_length=4, max_length=80)  # sort code + account no. / PayPal email / Revolut tag
+
+
+def masked(details: str) -> str:
+    d = details.strip()
+    return d if len(d) <= 4 else "•" * (len(d) - 4) + d[-4:]
+
+
+@api.get("/wallet")
+async def wallet(u=Depends(current_user)):
+    ledger = await db.wallet_ledger.find({"user_id": u["user_id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    pm = u.get("payout_method")
+    return {"balance": round(float(u.get("wallet_balance", 0)), 2), "earned": round(float(u.get("wallet_earned", 0)), 2),
+            "fee_pct": int(PLATFORM_FEE * 100), "min_payout": MIN_PAYOUT, "ledger": ledger,
+            "payout_method": {"method": pm["method"], "account_name": pm["account_name"], "details_masked": masked(pm["details"])} if pm else None}
+
+
+@api.put("/wallet/payout-method")
+async def set_payout_method(body: PayoutMethodIn, u=Depends(current_user)):
+    await db.users.update_one({"user_id": u["user_id"]}, {"$set": {"payout_method": body.model_dump()}})
+    return {"method": body.method, "account_name": body.account_name, "details_masked": masked(body.details)}
+
+
+@api.post("/wallet/payout")
+async def request_payout(u=Depends(current_user)):
+    bal = round(float(u.get("wallet_balance", 0)), 2)
+    if not u.get("payout_method"):
+        raise HTTPException(400, "Add where we should send your money first")
+    if bal < MIN_PAYOUT:
+        raise HTTPException(400, f"Minimum payout is £{MIN_PAYOUT:.2f} — you have £{bal:.2f}")
+    res = await db.users.update_one({"user_id": u["user_id"], "wallet_balance": {"$gte": bal}}, {"$inc": {"wallet_balance": -bal}})
+    if not res.modified_count:
+        raise HTTPException(409, "Balance changed, try again")
+    ts = iso(now())
+    payout = {"payout_id": new_id("po"), "user_id": u["user_id"], "amount": bal, "method": u["payout_method"]["method"],
+              "destination": masked(u["payout_method"]["details"]), "status": "processing", "eta": iso(now() + timedelta(days=2)), "created_at": ts}
+    await db.payouts.insert_one(dict(payout))
+    await db.wallet_ledger.insert_one({"entry_id": new_id("w"), "user_id": u["user_id"], "amount": -bal, "type": "payout", "status": "processing", "created_at": ts})
+    return payout
 
 
 @api.get("/payments/status/{session_id}")
@@ -1131,7 +1302,7 @@ async def payment_status(session_id: str, request: Request, u=Depends(current_us
     st = await stripe_client(request).get_checkout_status(session_id)
     await grant_if_paid(session_id, st.payment_status)
     fresh = await db.users.find_one({"user_id": u["user_id"]}, {"_id": 0})
-    return {"status": st.status, "payment_status": st.payment_status, "plan": tx["plan"], "user": public_user(fresh, True)}
+    return {"status": st.status, "payment_status": st.payment_status, "plan": tx.get("plan"), "kind": tx.get("kind"), "user": public_user(fresh, True)}
 
 
 @api.post("/webhook/stripe")
@@ -1183,6 +1354,9 @@ async def startup():
     await db.blocks.create_index([("user_id", 1), ("blocked_id", 1)], unique=True)
     await db.files.create_index("file_id", unique=True)
     await db.parties.create_index("invite_code")
+    await db.nights.create_index([("user_id", 1), ("weekend", 1)], unique=True)
+    await db.wallet_ledger.create_index([("user_id", 1), ("created_at", -1)])
+    asyncio.create_task(reminder_loop())
     try:
         await run_in_threadpool(init_storage)
     except Exception as e:

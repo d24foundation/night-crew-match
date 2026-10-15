@@ -10,6 +10,7 @@ import { useAuth } from "@/src/auth";
 import { usesNativeTabs } from "@/src/navigation";
 import { ChangePhotoBadge, usePhotoPicker } from "@/src/photo";
 import { Rating } from "@/src/party-extras";
+import { StreakCard } from "@/src/streak";
 import { Sheet } from "@/src/sheet";
 import { Avatar, Btn, Ionicons, TierBadge, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -54,7 +55,14 @@ export default function Profile() {
         </LinearGradient>
       </Pressable>
 
+      <StreakCard />
+
       <View style={s.card}>
+        <Pressable testID="wallet-row" onPress={() => router.push("/wallet")} style={s.row}>
+          <Ionicons name="wallet-outline" size={18} color={colors.brandSecondary} />
+          <Text style={s.rowText}>Host wallet — chip-ins you've earned</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
         <Pressable testID="credits-row" onPress={() => router.push("/credits")} style={s.row}>
           <Ionicons name="ticket-outline" size={18} color={colors.gold} />
           <Text style={s.rowText}>Credits · <Text style={{ color: colors.gold, fontWeight: "900" }} testID="profile-credits">{user.credits ?? 0}</Text> — top up from £1</Text>

@@ -11,6 +11,8 @@ const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_AP
 export const REVENUECAT_ENTITLEMENT_IDENTIFIER = "pro";
 export const SUPER_PACKAGE_ID = "super_monthly";
 export const PREMIUM_PACKAGE_ID = "$rc_monthly";
+export const SUPER_ANNUAL_PACKAGE_ID = "super_annual";
+export const PREMIUM_ANNUAL_PACKAGE_ID = "$rc_annual";
 
 export const rcEnabled = Platform.OS !== "web" || __DEV__;
 export const isTestStore = Platform.OS === "web" || __DEV__;
@@ -70,20 +72,27 @@ function useSubscriptionContext() {
   const packages = offeringsQuery.data?.current?.availablePackages ?? [];
   const superPkg = packages.find((p) => p.identifier === SUPER_PACKAGE_ID);
   const premiumPkg = packages.find((p) => p.identifier === PREMIUM_PACKAGE_ID);
+  const superAnnualPkg = packages.find((p) => p.identifier === SUPER_ANNUAL_PACKAGE_ID);
+  const premiumAnnualPkg = packages.find((p) => p.identifier === PREMIUM_ANNUAL_PACKAGE_ID);
   const activeProduct = info?.entitlements.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER]?.productIdentifier ?? "";
+  const superProductIds = [superPkg, superAnnualPkg].filter(Boolean).map((p) => p!.product.identifier.split(":")[0]);
   const storeTier: "premium" | "super" | null = !isSubscribed
     ? null
-    : superPkg && activeProduct.startsWith(superPkg.product.identifier.split(":")[0])
+    : superProductIds.some((id) => activeProduct.startsWith(id))
       ? "super"
       : "premium";
   const originalAppUserId = info?.originalAppUserId;
   const identityReady = !!originalAppUserId && !originalAppUserId.startsWith("$RCAnonymousID:");
+  const willRenew = info?.entitlements.active?.[REVENUECAT_ENTITLEMENT_IDENTIFIER]?.willRenew ?? null;
 
   return {
     customerInfo: info,
     offerings: offeringsQuery.data,
     superPkg,
     premiumPkg,
+    superAnnualPkg,
+    premiumAnnualPkg,
+    willRenew,
     isSubscribed,
     storeTier,
     identityReady,
@@ -107,4 +116,11 @@ export function useSubscription() {
   const ctx = useContext(Context);
   if (!ctx) throw new Error("useSubscription must be used within a SubscriptionProvider");
   return ctx;
+}
+
+// RevenueCat Customer Center: lets subscribers manage/cancel/refund themselves. Native store builds only.
+export const customerCenterAvailable = Platform.OS !== "web" && !__DEV__;
+export async function openCustomerCenter() {
+  const RevenueCatUI = (await import("react-native-purchases-ui")).default;
+  await RevenueCatUI.presentCustomerCenter();
 }

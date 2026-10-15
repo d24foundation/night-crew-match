@@ -8,7 +8,9 @@
 - Packages:
   - $rc_monthly -> prod9dc2383667 (Premium £3.99 / P1M, no trial)
   - super_monthly -> prod907364cb84 (Super Premium £7.99 / P1M, no trial)
-  - $rc_annual deleted
+  - $rc_annual -> proda38bb367a7 (Premium £29.99 / P1Y, no trial) — added 2026-10
+  - super_annual -> prod8bc72e9e19 (Super Premium £59.99 / P1Y, no trial) — added 2026-10
+- Customer Center: react-native-purchases-ui presentCustomerCenter() behind "Manage subscription" on /premium (native store builds only)
 - Dashboard: https://app.revenuecat.com/projects/proj29b05695
 - Tier detection client-side: active entitlement productIdentifier vs super_monthly package product id. Client sends X-Store-Tier header so backend perk checks honor it.
 

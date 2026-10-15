@@ -8,14 +8,15 @@ import type { PurchasesPackage } from "react-native-purchases";
 
 import { api, User } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { isTestStore, useSubscription } from "@/src/revenuecat";
+import { customerCenterAvailable, isTestStore, openCustomerCenter, useSubscription } from "@/src/revenuecat";
 import { Btn, IconBtn, Ionicons, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
 type Plan = "premium" | "super";
-const PLANS: { key: Plan; name: string; price: string; perks: string[] }[] = [
-  { key: "premium", name: "Premium", price: "£3.99", perks: ["Unlimited party joins", "Unlimited likes", "Boost your profile to the top"] },
-  { key: "super", name: "Super Premium", price: "£7.99", perks: ["Everything in Premium", "Host priority — your parties go first", "See exactly who's going", "Verified gold badge"] },
+type Cycle = "monthly" | "annual";
+const PLANS: { key: Plan; name: string; price: string; annual: string; perks: string[] }[] = [
+  { key: "premium", name: "Premium", price: "£3.99", annual: "£29.99", perks: ["Unlimited party joins", "Unlimited likes", "Boost your profile to the top"] },
+  { key: "super", name: "Super Premium", price: "£7.99", annual: "£59.99", perks: ["Everything in Premium", "Host priority — your parties go first", "See exactly who's going", "Verified gold badge"] },
 ];
 
 export default function Premium() {
@@ -28,6 +29,7 @@ export default function Premium() {
   const { user, setUser, purchaseIdentityError } = useAuth();
   const sub = useSubscription();
   const [plan, setPlan] = useState<Plan>("super");
+  const [cycle, setCycle] = useState<Cycle>("monthly");
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [confirm, setConfirm] = useState<PurchasesPackage | null>(null);
@@ -62,7 +64,11 @@ export default function Premium() {
     } catch (e) { toast((e as Error).message, "err"); } finally { setBusy(false); }
   };
 
-  const pkg = plan === "super" ? sub.superPkg : sub.premiumPkg;
+  const pkgFor = (p: Plan, c: Cycle) => (c === "annual" ? (p === "super" ? sub.superAnnualPkg : sub.premiumAnnualPkg) : (p === "super" ? sub.superPkg : sub.premiumPkg));
+  const pkg = pkgFor(plan, cycle);
+  const manage = async () => {
+    try { await openCustomerCenter(); } catch (e: any) { toast(String(e?.message ?? e), "err"); }
+  };
   const buyInApp = async (p: PurchasesPackage) => {
     setConfirm(null);
     try {
@@ -93,9 +99,20 @@ export default function Premium() {
         )}
         {checking && <View style={s.active}><ActivityIndicator color={colors.onBrandSecondary} /><Text style={s.activeText}>Confirming payment...</Text></View>}
 
+        <View style={s.cycleRow}>
+          <Pressable testID="cycle-monthly" onPress={() => setCycle("monthly")} style={[s.cycleBtn, cycle === "monthly" && s.cycleOn]}>
+            <Text style={[s.cycleText, cycle === "monthly" && { color: colors.onBrandPrimary }]}>Monthly</Text>
+          </Pressable>
+          <Pressable testID="cycle-annual" onPress={() => setCycle("annual")} style={[s.cycleBtn, cycle === "annual" && s.cycleOn]}>
+            <Text style={[s.cycleText, cycle === "annual" && { color: colors.onBrandPrimary }]}>Yearly</Text>
+            <View style={s.save}><Text style={s.saveText}>SAVE 37%</Text></View>
+          </Pressable>
+        </View>
+
         {PLANS.map((p) => {
           const on = plan === p.key;
-          const rcPrice = (p.key === "super" ? sub.superPkg : sub.premiumPkg)?.product.priceString;
+          const rcPrice = pkgFor(p.key, cycle)?.product.priceString;
+          const fallback = cycle === "annual" ? p.annual : p.price;
           return (
             <Pressable key={p.key} testID={`plan-${p.key}`} onPress={() => setPlan(p.key)}>
               <LinearGradient colors={on ? (p.key === "super" ? [colors.gold, colors.brandPrimary] : [colors.brandPrimary, colors.brandTertiary]) : [colors.surfaceSecondary, colors.surfaceSecondary]}
@@ -105,7 +122,7 @@ export default function Premium() {
                     <Text style={s.planName} numberOfLines={2}>{p.name}</Text>
                     {p.key === "super" && <View style={s.pop}><Text style={s.popText}>MOST VIRAL</Text></View>}
                   </View>
-                  <Text style={s.price} testID={`plan-${p.key}-price`}>{isTestStore ? p.price : rcPrice ?? p.price}<Text style={s.per}>/mo</Text></Text>
+                  <Text style={s.price} testID={`plan-${p.key}-price`}>{isTestStore ? fallback : rcPrice ?? fallback}<Text style={s.per}>{cycle === "annual" ? "/yr" : "/mo"}</Text></Text>
                 </View>
                 {p.perks.map((perk) => (
                   <View key={perk} style={s.perk}><Ionicons name="checkmark" size={16} color={colors.onSurface} /><Text style={s.perkText}>{perk}</Text></View>
@@ -124,11 +141,14 @@ export default function Premium() {
         ) : (
           <Text style={s.muted}>In-app subscription options are unavailable right now. Please try again later.</Text>
         )}
-        <Btn testID="pay-with-card-button" title={`Pay ${PLANS.find((x) => x.key === plan)!.price} with card`} icon="card" variant="ghost" loading={busy} onPress={payStripe} />
+        <Btn testID="pay-with-card-button" title={`Pay ${PLANS.find((x) => x.key === plan)!.price} with card (monthly)`} icon="card" variant="ghost" loading={busy} onPress={payStripe} />
         <Pressable testID="restore-purchases-button" onPress={restore} style={{ alignItems: "center", padding: 8 }}>
           <Text style={s.link}>{sub.isRestoring ? "Restoring..." : "Restore purchases"}</Text>
         </Pressable>
-        <Text style={s.fine}>Monthly, cancel anytime. Card payments give 30 days access.</Text>
+        {sub.isSubscribed && customerCenterAvailable && (
+          <Btn testID="manage-subscription-button" title="Manage subscription" icon="settings-outline" variant="ghost" onPress={manage} />
+        )}
+        <Text style={s.fine}>{cycle === "annual" ? "Billed yearly, cancel anytime." : "Monthly, cancel anytime."} Card payments give 30 days access.</Text>
         <Pressable testID="premium-to-credits-button" onPress={() => router.push("/credits")} style={{ alignItems: "center", padding: 8 }}>
           <Text style={s.link}>Not ready to subscribe? Buy credits from £1</Text>
         </Pressable>
@@ -155,6 +175,12 @@ const useStyles = makeStyles((c) => ({
   active: { flexDirection: "row", gap: 8, alignItems: "center", backgroundColor: c.brandSecondary, padding: 12, borderRadius: radius.md },
   activeText: { color: c.onBrandSecondary, fontWeight: "800" },
   plan: { borderRadius: radius.lg, padding: spacing.md, gap: 8 },
+  cycleRow: { flexDirection: "row", backgroundColor: c.surfaceTertiary, borderRadius: radius.pill, padding: 4, borderWidth: 1, borderColor: c.border },
+  cycleBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 40, borderRadius: radius.pill },
+  cycleOn: { backgroundColor: c.brandPrimary },
+  cycleText: { color: c.onSurfaceTertiary, fontWeight: "900" },
+  save: { backgroundColor: c.gold, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.pill },
+  saveText: { color: c.onGold, fontSize: 9, fontWeight: "900" },
   planHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
   planLeft: { flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   planName: { color: c.onSurface, fontSize: 20, fontWeight: "900", flexShrink: 1 },

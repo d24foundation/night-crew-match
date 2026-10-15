@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Share, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, Share, Text, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
+import * as WebBrowser from "expo-web-browser";
 
 import { api, ApiError, fmtDistance, inviteLink, Party, partyLink } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { JoinWall, PromoSheet } from "@/src/marketing";
+import { openDirections } from "@/src/reminders";
 import { SafetySheet } from "@/src/safety";
 import { DoorPass, RateCard, Rating } from "@/src/party-extras";
 import { Avatar, Btn, formatStart, IconBtn, Ionicons, TierBadge, useToast } from "@/src/ui";
@@ -18,7 +20,7 @@ import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 type Role = "drinks" | "chipin" | "house";
 
 export default function PartyDetail() {
-  const { id, invite } = useLocalSearchParams<{ id: string; invite?: string }>();
+  const { id, invite, stripe_session } = useLocalSearchParams<{ id: string; invite?: string; stripe_session?: string }>();
   const s = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -34,6 +36,40 @@ export default function PartyDetail() {
   const [promo, setPromo] = useState(false);
   const { refresh } = useAuth();
   const p = q.data;
+  const [paying, setPaying] = useState(false);
+
+  // Back from Stripe after paying the chip-in: confirm and refresh the party
+  const polled = useRef(false);
+  useEffect(() => {
+    if (!stripe_session || polled.current) return;
+    polled.current = true;
+    (async () => {
+      for (let i = 0; i < 6; i++) {
+        try {
+          const r = await api<{ payment_status: string }>(`/payments/status/${stripe_session}`);
+          if (r.payment_status === "paid") { toast("Chip-in paid — host notified 🎉"); q.refetch(); return; }
+          if (r.payment_status === "expired") break;
+        } catch { break; }
+        await new Promise((res) => setTimeout(res, 2000));
+      }
+    })();
+  }, [stripe_session, q, toast]);
+
+  const payChipIn = async () => {
+    if (!p) return;
+    setPaying(true);
+    try {
+      const origin = Platform.OS === "web" && typeof window !== "undefined" ? window.location.origin : process.env.EXPO_PUBLIC_BACKEND_URL!;
+      const r = await api<{ url: string; session_id: string }>("/payments/checkout", { body: { party_id: p.party_id, origin_url: origin } });
+      if (Platform.OS === "web") { window.location.href = r.url; return; }
+      await WebBrowser.openBrowserAsync(r.url);
+      for (let i = 0; i < 8; i++) {
+        const st = await api<{ payment_status: string }>(`/payments/status/${r.session_id}`);
+        if (st.payment_status === "paid") { toast("Chip-in paid — host notified 🎉"); q.refetch(); break; }
+        await new Promise((res) => setTimeout(res, 2000));
+      }
+    } catch (e) { toast((e as Error).message, "err"); } finally { setPaying(false); }
+  };
 
   // Arrived via an invite link: auto-join once (invites bypass the free daily join limit).
   const inviteTried = useRef(false);
@@ -67,11 +103,7 @@ export default function PartyDetail() {
     } catch (e) { toast((e as Error).message, "err"); }
   };
 
-  const openMaps = () => {
-    if (!p?.address) return;
-    const q = encodeURIComponent(`${p.address}, ${p.city}`);
-    Linking.openURL(Platform.select({ ios: `maps:0,0?q=${q}`, default: `https://www.google.com/maps/search/?api=1&query=${q}` })!);
-  };
+  const openMaps = () => { if (p) openDirections(p); };
 
   const act = async (path: string, body?: object) => {
     setBusy(true);
@@ -144,6 +176,27 @@ export default function PartyDetail() {
 
           {p.attending && p.started && <RateCard partyId={p.party_id} hostName={p.host?.name} onRated={() => { q.refetch(); qc.invalidateQueries({ queryKey: ["ratings-pending"] }); }} />}
 
+          {p.attending && p.chip_in > 0 && (
+            <View style={[s.invite, p.my_paid ? { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.brandSecondary } : { backgroundColor: colors.gold }]} testID="chipin-card">
+              <Ionicons name={p.my_paid ? "checkmark-circle" : "cash"} size={22} color={p.my_paid ? colors.brandSecondary : colors.onGold} />
+              <View style={{ flex: 1 }}>
+                <Text style={[s.inviteTitle, { color: p.my_paid ? colors.onSurface : colors.onGold }]}>{p.my_paid ? "Chip-in paid ✓" : `Chip in £${p.chip_in.toFixed(2)} now`}</Text>
+                <Text style={[s.inviteSub, { color: p.my_paid ? colors.onSurfaceTertiary : colors.onGold }]}>{p.my_paid ? "Thanks — the host has your share." : "Pay in-app, skip the awkward cash chat. Goes straight to the host."}</Text>
+              </View>
+              {!p.my_paid && <Btn testID="pay-chipin-button" title="Pay" variant="primary" loading={paying} onPress={payChipIn} style={{ height: 40, paddingHorizontal: 16 }} />}
+            </View>
+          )}
+          {p.is_host && p.chip_in > 0 && (
+            <Pressable testID="collected-card" onPress={() => router.push("/wallet")} style={[s.invite, { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border }]}>
+              <Ionicons name="wallet" size={22} color={colors.brandSecondary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[s.inviteTitle, { color: colors.onSurface }]}>£{(p.collected ?? 0).toFixed(2)} collected · {p.paid_count} paid</Text>
+                <Text style={[s.inviteSub, { color: colors.onSurfaceTertiary }]}>Chip-ins land in your wallet automatically. Tap to withdraw.</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+            </Pressable>
+          )}
+
           <View style={s.stats}>
             <Stat icon="home" label={p.house_provided ? "House sorted" : "Need a house"} ok={p.house_provided} />
             <Stat icon="wine" label={`${p.drinks_count}/${p.drinks_needed} drinks`} ok={p.drinks_count >= p.drinks_needed} />
@@ -189,6 +242,7 @@ export default function PartyDetail() {
                   <Text style={s.attName}>{a.name}</Text>
                   <TierBadge tier={a.tier} />
                   {a.checked_in && <Ionicons name="checkmark-circle" size={16} color={colors.brandSecondary} testID={`checked-in-${a.user_id}`} />}
+                  {a.paid && <Ionicons name="cash" size={16} color={colors.gold} testID={`paid-${a.user_id}`} />}
                   <View style={{ flex: 1 }} />
                   <Text style={s.attRole}>{a.role === "drinks" ? "Drinks" : a.role === "house" ? "House" : "Chip-in"}</Text>
                 </Pressable>

@@ -92,6 +92,7 @@ function Gate() {
         <Stack.Screen name="invite/[code]" options={{ presentation: "modal" }} />
         <Stack.Screen name="party/scan/[id]" options={{ presentation: "modal" }} />
         <Stack.Screen name="credits" options={{ presentation: "modal" }} />
+        <Stack.Screen name="wallet" options={{ presentation: "modal" }} />
         <Stack.Screen name="r/[code]" />
       </Stack.Protected>
     </Stack>

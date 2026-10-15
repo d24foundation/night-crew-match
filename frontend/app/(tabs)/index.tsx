@@ -13,6 +13,7 @@ import { useLocation } from "@/src/location";
 import { usesNativeTabs } from "@/src/navigation";
 import { PartyMap } from "@/src/party-map";
 import { Rating } from "@/src/party-extras";
+import { ReminderBanner } from "@/src/reminders";
 import { Avatar, Btn, Chip, formatStart, Ionicons, TierBadge, useToast, Wordmark } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
 
@@ -88,7 +89,7 @@ export default function Parties() {
             </View>
           }
           renderItem={({ item, index }) => <PartyCard p={item} index={index} onPress={() => router.push(`/party/${item.party_id}`)} />}
-          ListHeaderComponent={<><RatePrompt />{(q.data?.length ?? 0) > 0 ? <VibeMatcher /> : null}</>}
+          ListHeaderComponent={<><ReminderBanner /><RatePrompt />{(q.data?.length ?? 0) > 0 ? <VibeMatcher /> : null}</>}
         />
       )}
 

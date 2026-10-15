@@ -49,9 +49,9 @@ export type Party = {
   vibe: string; house_provided: boolean; drinks_needed: number; chip_in: number; capacity: number; cover: string;
   host_id: string; host: User | null; going_count: number; drinks_count: number; chipin_count: number;
   is_host: boolean; attending: boolean; my_role: string | null; address: string | null;
-  can_see_attendees: boolean; attendees: (User & { role: string; checked_in: boolean })[]; attendee_pics: (string | null)[];
+  can_see_attendees: boolean; attendees: (User & { role: string; checked_in: boolean; paid: boolean })[]; attendee_pics: (string | null)[];
   lat: number | null; lng: number | null; distance_km: number | null; invite_code: string | null;
-  started: boolean; checked_in_count: number; promoted: boolean;
+  started: boolean; checked_in_count: number; promoted: boolean; paid_count: number; collected: number | null; my_paid: boolean;
 };
 
 export const wsUrl = (path: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL!.replace(/^http/, "ws")}/api${path}`;

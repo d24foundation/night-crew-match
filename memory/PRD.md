@@ -41,6 +41,10 @@ Mobile app that connects people for after-parties when clubs close (or during th
 - Credits economy (GBP one-off via Stripe): £1=10, £2=25, £5=70; spend on boost (5), extra join (2), promote party (10); ledger at /credits
 - Marketing: referral codes (+5 credits each side, /r/<code>), AI promo captions (/parties/{id}/promo), one-tap share, paid party promotion pinned to feed top
 - Security: per-IP rate limits on auth/upload/payments/reports (429), security headers (HSTS, nosniff, DENY, Referrer-Policy), image magic-byte validation, origin validation on checkout, atomic credit debits
+- Host payouts: guests pay chip-in via Stripe (GBP) → host wallet (10% platform fee), /wallet with payout method (bank/PayPal/Revolut, masked) and payout requests (min £5, status processing)
+- Smart reminders: /reminders/upcoming banner on feed (starts in X min + directions); backend loop pushes "1 hour to go" to guests/host
+- Weekend streaks: nights recorded on check-in/rating for Fri–Sun parties; consecutive-weekend streak, credits reward min(streak,5), badges at 1/3/6/10; StreakCard on profile
+- RevenueCat: annual packages added via proxy ($rc_annual £29.99, super_annual £59.99); paywall monthly/yearly toggle; Customer Center "Manage subscription" (native builds)
 
 ## Backlog
 - P0: Push notifications (need google-services.json)
