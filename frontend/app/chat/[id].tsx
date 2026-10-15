@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Platform, Pressable, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api, getApiToken } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useLiveChat } from "@/src/live-chat";
+import { BillsSheet, useBills } from "@/src/bills";
 import { SafetySheet } from "@/src/safety";
 import { Avatar, IconBtn, Ionicons, useToast } from "@/src/ui";
 import { makeStyles, radius, spacing, useTheme } from "@/src/theme";
@@ -16,7 +17,7 @@ type Msg = { message_id: string; sender_id: string; sender_name: string; sender_
 type Chat = { chat_id: string; title: string; kind: string; picture?: string | null; other_user_id?: string; messages: Msg[] };
 
 export default function ChatScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, stripe_session } = useLocalSearchParams<{ id: string; stripe_session?: string }>();
   const s = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -35,7 +36,27 @@ export default function ChatScreen() {
     });
     qc.invalidateQueries({ queryKey: ["chats"] });
   }, [qc, id]);
-  const live = useLiveChat(id, getApiToken(), appendMsg);
+  const live = useLiveChat(id, getApiToken(), appendMsg, () => qc.invalidateQueries({ queryKey: ["bills", id] }));
+  const [bills, setBills] = useState(false);
+  const billsQ = useBills(id, true);
+  const owedCount = (billsQ.data ?? []).filter((b) => !b.my_paid && b.my_share != null).length;
+
+  // Back from Stripe after settling a bill share
+  const polled = useRef(false);
+  useEffect(() => {
+    if (!stripe_session || polled.current) return;
+    polled.current = true;
+    (async () => {
+      for (let i = 0; i < 6; i++) {
+        try {
+          const r = await api<{ payment_status: string }>(`/payments/status/${stripe_session}`);
+          if (r.payment_status === "paid") { toast("Settled — money sent 🎉"); qc.invalidateQueries({ queryKey: ["bills", id] }); setBills(true); return; }
+          if (r.payment_status === "expired") break;
+        } catch { break; }
+        await new Promise((res) => setTimeout(res, 2000));
+      }
+    })();
+  }, [stripe_session, id, qc, toast]);
   // Socket delivers messages instantly; the poll is only a safety net.
   const q = useQuery({ queryKey: ["chat", id], queryFn: () => api<Chat>(`/chats/${id}`), refetchInterval: live.connected ? 20000 : 3000 });
 
@@ -79,6 +100,12 @@ export default function ChatScreen() {
               : q.data?.kind === "party" ? "Party group chat · hold a message to report" : live.connected ? "Live" : "Match"}
           </Text>
         </View>
+        {q.data?.kind === "party" && (
+          <View>
+            <IconBtn testID="chat-bills-button" icon="receipt-outline" onPress={() => setBills(true)} />
+            {owedCount > 0 && <View style={s.dot} testID="bills-owed-dot"><Text style={s.dotText}>{owedCount}</Text></View>}
+          </View>
+        )}
         {q.data?.kind === "match" && q.data.other_user_id && (
           <IconBtn testID="chat-safety-button" icon="ellipsis-horizontal" onPress={() => setSafety({ user_id: q.data!.other_user_id!, name: q.data!.title })} />
         )}
@@ -122,6 +149,7 @@ export default function ChatScreen() {
         </View>
       </KeyboardAvoidingView>
       <SafetySheet target={safety} context={id} onClose={() => setSafety(null)} onBlocked={onBlocked} />
+      {q.data?.kind === "party" && <BillsSheet chatId={id} visible={bills} onClose={() => setBills(false)} />}
     </View>
   );
 }
@@ -140,6 +168,8 @@ const useStyles = makeStyles((c) => ({
   inputBar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: spacing.md, paddingTop: 8, borderTopWidth: 1, borderTopColor: c.divider, backgroundColor: c.surface },
   typingPill: { position: "absolute", top: -30, left: spacing.md, backgroundColor: c.surfaceTertiary, paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.pill },
   typingText: { color: c.brandSecondary, fontSize: 12, fontWeight: "700" },
+  dot: { position: "absolute", top: -2, right: -2, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: c.gold, alignItems: "center", justifyContent: "center", paddingHorizontal: 4 },
+  dotText: { color: c.onGold, fontSize: 10, fontWeight: "900" },
   input: { flex: 1, height: 46, borderRadius: 23, backgroundColor: c.surfaceTertiary, color: c.onSurface, paddingHorizontal: 16, fontSize: 15 },
   wing: { width: 46, height: 46, borderRadius: 23, backgroundColor: c.brandSecondary, alignItems: "center", justifyContent: "center" },
   send: { width: 46, height: 46, borderRadius: 23, backgroundColor: c.brandPrimary, alignItems: "center", justifyContent: "center" },

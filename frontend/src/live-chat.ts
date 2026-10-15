@@ -7,7 +7,7 @@ type Msg = { message_id: string; sender_id: string; sender_name: string; sender_
 
 // Realtime chat socket: new messages + typing indicators. Reconnects with backoff; the screen
 // keeps a slow poll as a safety net so nothing is lost if the socket is down.
-export function useLiveChat(chatId: string, token: string | null, onMessage: (m: Msg) => void) {
+export function useLiveChat(chatId: string, token: string | null, onMessage: (m: Msg) => void, onBill?: () => void) {
   const [connected, setConnected] = useState(false);
   const [typing, setTyping] = useState<Record<string, string>>({});
   const ws = useRef<WebSocket | null>(null);
@@ -15,6 +15,8 @@ export function useLiveChat(chatId: string, token: string | null, onMessage: (m:
   const lastTyping = useRef(0);
   const onMsg = useRef(onMessage);
   onMsg.current = onMessage;
+  const onBillRef = useRef(onBill);
+  onBillRef.current = onBill;
 
   useEffect(() => {
     if (!token || !chatId) return;
@@ -28,6 +30,7 @@ export function useLiveChat(chatId: string, token: string | null, onMessage: (m:
         try {
           const d = JSON.parse(String(e.data));
           if (d.type === "message") onMsg.current(d.message);
+          if (d.type === "bill") onBillRef.current?.();
           if (d.type === "typing") {
             setTyping((t) => { const n = { ...t }; if (d.on) n[d.user_id] = d.name; else delete n[d.user_id]; return n; });
             if (timers.current[d.user_id]) clearTimeout(timers.current[d.user_id]);

@@ -57,6 +57,15 @@ export default function Profile() {
 
       <StreakCard />
 
+      <Pressable testID="verify-host-card" onPress={() => router.push("/verify-host")} style={[s.card, { flexDirection: "row", alignItems: "center", gap: 12, borderColor: user.host_verified ? colors.brandSecondary : colors.border, borderWidth: 1 }]}>
+        <Ionicons name="shield-checkmark" size={26} color={user.host_verified ? colors.brandSecondary : colors.gold} />
+        <View style={{ flex: 1 }}>
+          <Text style={[s.rowText, { fontWeight: "900" }]}>{user.host_verified ? "Verified host" : user.host_verification_status === "pending" ? "Verification under review" : "Become a verified host"}</Text>
+          <Text style={{ color: colors.muted, fontSize: 12 }}>{user.host_verified ? "Guests see your shield on every party" : "ID + selfie check · fills your parties faster"}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+      </Pressable>
+
       <View style={s.card}>
         <Pressable testID="wallet-row" onPress={() => router.push("/wallet")} style={s.row}>
           <Ionicons name="wallet-outline" size={18} color={colors.brandSecondary} />

@@ -124,6 +124,7 @@ function PartyCard({ p, index, onPress }: { p: Party; index: number; onPress: ()
           <View style={s.hostRow}>
             <Avatar uri={p.host?.picture} name={p.host?.name} size={28} />
             <Text style={s.hostName}>{p.host?.name}</Text>
+            {p.host?.host_verified && <Ionicons name="shield-checkmark" size={14} color={colors.brandSecondary} />}
             {p.host && <TierBadge tier={p.host.tier} />}
             <Rating avg={p.host?.rating_avg} count={p.host?.rating_count} />
             <View style={{ flex: 1 }} />

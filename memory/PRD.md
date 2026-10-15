@@ -45,6 +45,10 @@ Mobile app that connects people for after-parties when clubs close (or during th
 - Smart reminders: /reminders/upcoming banner on feed (starts in X min + directions); backend loop pushes "1 hour to go" to guests/host
 - Weekend streaks: nights recorded on check-in/rating for Fri–Sun parties; consecutive-weekend streak, credits reward min(streak,5), badges at 1/3/6/10; StreakCard on profile
 - RevenueCat: annual packages added via proxy ($rc_annual £29.99, super_annual £59.99); paywall monthly/yearly toggle; Customer Center "Manage subscription" (native builds)
+- App icon/splash/adaptive icon/favicon generated from the user's uploaded logo (assets/images/*)
+- RevenueCat: 7-day free trial (P1W) on both annual packages; paywall shows "7 DAYS FREE" + trial banner
+- Split the bill: /chats/{party}/bills CRUD, equal split, pay share via Stripe → creator wallet (no fee), cash mark-paid, ws "bill" refresh; BillsSheet in party chats
+- Host ID verification: /me/verify-host (ID + selfie → private storage), admin review via x-admin-secret (ADMIN_SECRET in backend/.env), host_verified shield on parties; /verify-host screen
 
 ## Backlog
 - P0: Push notifications (need google-services.json)

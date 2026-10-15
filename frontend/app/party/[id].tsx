@@ -167,6 +167,7 @@ export default function PartyDetail() {
               <Text style={s.muted}>Hosted by</Text>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 <Text style={s.hostName}>{p.host?.name}</Text>
+                {p.host?.host_verified && <Ionicons name="shield-checkmark" size={16} color={colors.brandSecondary} testID="host-verified-badge" />}
                 {p.host && <TierBadge tier={p.host.tier} />}
                 <Rating avg={p.host?.rating_avg} count={p.host?.rating_count} testID="host-rating" />
               </View>

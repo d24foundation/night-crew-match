@@ -105,9 +105,15 @@ export default function Premium() {
           </Pressable>
           <Pressable testID="cycle-annual" onPress={() => setCycle("annual")} style={[s.cycleBtn, cycle === "annual" && s.cycleOn]}>
             <Text style={[s.cycleText, cycle === "annual" && { color: colors.onBrandPrimary }]}>Yearly</Text>
-            <View style={s.save}><Text style={s.saveText}>SAVE 37%</Text></View>
+            <View style={s.save}><Text style={s.saveText}>7 DAYS FREE</Text></View>
           </Pressable>
         </View>
+        {cycle === "annual" && (
+          <View style={s.trial} testID="trial-banner">
+            <Ionicons name="gift" size={18} color={colors.gold} />
+            <Text style={s.trialText}>Try it free for 7 days — cancel anytime before it ends and pay nothing. Then {PLANS.find((x) => x.key === plan)!.annual}/yr (save 37%).</Text>
+          </View>
+        )}
 
         {PLANS.map((p) => {
           const on = plan === p.key;
@@ -135,7 +141,7 @@ export default function Premium() {
         {!!purchaseIdentityError && <Text style={s.err} testID="purchase-identity-error">Account link issue: {purchaseIdentityError}</Text>}
 
         {sub.isLoading ? <ActivityIndicator color={colors.brandPrimary} /> : pkg ? (
-          <Btn testID="subscribe-in-app-button" title={`Subscribe in app${isTestStore ? " (simulated)" : ""}`} icon="phone-portrait" variant={plan === "super" ? "gold" : "primary"}
+          <Btn testID="subscribe-in-app-button" title={cycle === "annual" ? `Start 7-day free trial${isTestStore ? " (simulated)" : ""}` : `Subscribe in app${isTestStore ? " (simulated)" : ""}`} icon="phone-portrait" variant={plan === "super" ? "gold" : "primary"}
             disabled={!sub.identityReady || sub.isPurchasing} loading={sub.isPurchasing}
             onPress={() => (isTestStore ? setConfirm(pkg) : buyInApp(pkg))} />
         ) : (
@@ -181,6 +187,8 @@ const useStyles = makeStyles((c) => ({
   cycleText: { color: c.onSurfaceTertiary, fontWeight: "900" },
   save: { backgroundColor: c.gold, paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.pill },
   saveText: { color: c.onGold, fontSize: 9, fontWeight: "900" },
+  trial: { flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: radius.md, backgroundColor: c.surfaceSecondary, borderWidth: 1, borderColor: c.gold },
+  trialText: { color: c.onSurface, flex: 1, fontSize: 13, fontWeight: "600", lineHeight: 18 },
   planHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
   planLeft: { flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
   planName: { color: c.onSurface, fontSize: 20, fontWeight: "900", flexShrink: 1 },

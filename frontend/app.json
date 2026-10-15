@@ -20,7 +20,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "backgroundColor": "#140628"
       },
       "package": "com.emergent.nightcrewmatch.k5qoxm",
       "permissions": [
@@ -41,9 +41,9 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-image.png",
-          "imageWidth": 200,
+          "imageWidth": 260,
           "resizeMode": "contain",
-          "backgroundColor": "#000000"
+          "backgroundColor": "#140628"
         }
       ],
       "expo-font",

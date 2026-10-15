@@ -42,6 +42,7 @@ export type User = {
   user_id: string; name: string; picture?: string | null; city: string; bio: string; age?: number | null;
   vibes: string[]; tier: "free" | "premium" | "super"; verified: boolean; boosted: boolean; email?: string;
   tier_expires?: string | null; rating_avg?: number | null; rating_count?: number; age_verified?: boolean; credits?: number;
+  host_verified?: boolean; host_verification_status?: "pending" | "approved" | "rejected" | null;
 };
 
 export type Party = {
@@ -64,16 +65,22 @@ export const referralLink = (code: string) => `${process.env.EXPO_PUBLIC_BACKEND
 export const partyLink = (id: string) => `${process.env.EXPO_PUBLIC_BACKEND_URL}/party/${id}`;
 
 export async function uploadPhoto(file: { uri: string; name: string; type: string }): Promise<User> {
+  return uploadFiles<User>("/me/photo", { file });
+}
+
+export async function uploadFiles<T>(path: string, files: Record<string, { uri: string; name: string; type: string }>): Promise<T> {
   const form = new FormData();
-  if (Platform.OS === "web") {
-    const blob = await (await fetch(file.uri)).blob();
-    form.append("file", blob, file.name);
-  } else {
-    form.append("file", file as any);
+  for (const [field, file] of Object.entries(files)) {
+    if (Platform.OS === "web") {
+      const blob = await (await fetch(file.uri)).blob();
+      form.append(field, blob, file.name);
+    } else {
+      form.append(field, file as any);
+    }
   }
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  const r = await fetch(`${BASE}/me/photo`, { method: "POST", headers, body: form });
+  const r = await fetch(`${BASE}${path}`, { method: "POST", headers, body: form });
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
     throw new ApiError(r.status, typeof data.detail === "string" ? data.detail : `Upload failed (${r.status})`);

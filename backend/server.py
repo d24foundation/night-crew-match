@@ -158,12 +158,14 @@ def public_user(u: dict, me: bool = False) -> dict:
         "boosted": bool(parse_dt(u.get("boosted_until")) and parse_dt(u.get("boosted_until")) > now()),
         "rating_avg": round(u["rating_sum"] / u["rating_count"], 1) if u.get("rating_count") else None,
         "rating_count": u.get("rating_count", 0),
+        "host_verified": (u.get("host_verification") or {}).get("status") == "approved",
     }
     if me:
         out["email"] = u.get("email")
         out["tier_expires"] = u.get("tier_expires") if tier != "free" else None
         out["age_verified"] = bool(u.get("age_verified"))
         out["credits"] = int(u.get("credits", 0))
+        out["host_verification_status"] = (u.get("host_verification") or {}).get("status")
     return out
 
 
@@ -713,6 +715,171 @@ async def report_user(body: ReportIn, u=Depends(current_user)):
     return {"reported": True}
 
 
+# ---------------- Split the bill (party chat) ----------------
+class BillIn(BaseModel):
+    title: str = Field(min_length=1, max_length=60)
+    amount: float = Field(gt=0, le=5000)
+    participants: Optional[List[str]] = None  # default: everyone in the party (host + guests)
+
+
+def bill_view(b: dict, uid: str, users: dict) -> dict:
+    paid = b.get("paid", {})
+    people = [{"user_id": x, "name": users.get(x, {}).get("name", "Guest"), "picture": users.get(x, {}).get("picture"),
+               "share": b["shares"][x], "paid": x in paid or x == b["creator_id"], "method": paid.get(x, {}).get("method")} for x in b["shares"]]
+    return {"bill_id": b["bill_id"], "chat_id": b["chat_id"], "title": b["title"], "amount": b["amount"], "creator_id": b["creator_id"],
+            "creator_name": users.get(b["creator_id"], {}).get("name", "Someone"), "created_at": b["created_at"], "people": people,
+            "my_share": b["shares"].get(uid), "my_paid": uid in paid or uid == b["creator_id"], "is_creator": b["creator_id"] == uid,
+            "settled": all(p["paid"] for p in people), "collected": round(sum(p["share"] for p in people if p["paid"] and p["user_id"] != b["creator_id"]), 2)}
+
+
+async def settle_bill_share(bill_id: str, payer_id: str, method: str):
+    b = await db.bills.find_one({"bill_id": bill_id}, {"_id": 0})
+    if not b or payer_id not in b["shares"] or payer_id in b.get("paid", {}):
+        return
+    ts = iso(now())
+    await db.bills.update_one({"bill_id": bill_id}, {"$set": {f"paid.{payer_id}": {"at": ts, "method": method}}})
+    share = float(b["shares"][payer_id])
+    payer = await db.users.find_one({"user_id": payer_id}, {"_id": 0, "name": 1})
+    if method == "card":
+        # Card settlements land in the bill creator's wallet, no platform fee between friends
+        await db.users.update_one({"user_id": b["creator_id"]}, {"$inc": {"wallet_balance": share, "wallet_earned": share}})
+        await db.wallet_ledger.insert_one({"entry_id": new_id("w"), "user_id": b["creator_id"], "amount": share, "gross": share, "fee": 0.0, "type": "split",
+                                           "party_id": b["chat_id"], "party_title": b["title"], "from_name": payer.get("name") if payer else None, "created_at": ts})
+    await notify([b["creator_id"]], {"title": f"{payer.get('name') if payer else 'Someone'} settled £{share:.2f}", "message": f"For “{b['title']}” · {'paid by card into your wallet' if method == 'card' else 'marked as paid'}", "action_url": f"/chat/{b['chat_id']}"})
+    await hub.broadcast(b["chat_id"], {"type": "bill"})
+
+
+@api.get("/chats/{chat_id}/bills")
+async def list_bills(chat_id: str, u=Depends(current_user)):
+    await chat_access(chat_id, u)
+    bills = await db.bills.find({"chat_id": chat_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    ids = {x for b in bills for x in b["shares"]} | {b["creator_id"] for b in bills}
+    users = {x["user_id"]: x for x in await db.users.find({"user_id": {"$in": list(ids)}}, {"_id": 0}).to_list(500)}
+    return [bill_view(b, u["user_id"], users) for b in bills]
+
+
+@api.post("/chats/{chat_id}/bills", status_code=201)
+async def create_bill(chat_id: str, body: BillIn, u=Depends(current_user)):
+    info = await chat_access(chat_id, u)
+    if info["kind"] != "party":
+        raise HTTPException(400, "Bills live in party group chats")
+    p = await db.parties.find_one({"party_id": chat_id}, {"_id": 0})
+    members = {p["host_id"], *[a["user_id"] for a in p["attendees"]]}
+    people = set(body.participants or members) & members
+    people.add(u["user_id"])
+    if len(people) < 2:
+        raise HTTPException(400, "Pick at least one other person to split with")
+    n = len(people)
+    share = round(body.amount / n, 2)
+    shares = {x: share for x in people}
+    # Put rounding pennies on the creator so the total always adds up
+    shares[u["user_id"]] = round(body.amount - share * (n - 1), 2)
+    b = {"bill_id": new_id("bill"), "chat_id": chat_id, "creator_id": u["user_id"], "title": body.title.strip(), "amount": round(body.amount, 2),
+         "shares": shares, "paid": {}, "created_at": iso(now())}
+    await db.bills.insert_one(dict(b))
+    m = {"message_id": new_id("msg"), "chat_id": chat_id, "sender_id": u["user_id"], "sender_name": u.get("name"), "sender_picture": u.get("picture"),
+         "text": f"💸 Split: {b['title']} — £{b['amount']:.2f} between {n} → £{share:.2f} each. Settle up in Bills.", "created_at": iso(now())}
+    await db.messages.insert_one(dict(m))
+    await hub.broadcast(chat_id, {"type": "message", "message": m})
+    await hub.broadcast(chat_id, {"type": "bill"})
+    await notify([x for x in people if x != u["user_id"]], {"title": f"You owe £{share:.2f} for {b['title']}", "message": f"{u.get('name')} split the bill in {p['title']}. Settle up in-app.", "action_url": f"/chat/{chat_id}"})
+    users = {x["user_id"]: x for x in await db.users.find({"user_id": {"$in": list(people)}}, {"_id": 0}).to_list(500)}
+    return bill_view(b, u["user_id"], users)
+
+
+class MarkPaidIn(BaseModel):
+    user_id: str
+
+
+@api.post("/bills/{bill_id}/mark-paid")
+async def mark_bill_paid(bill_id: str, body: MarkPaidIn, u=Depends(current_user)):
+    b = await db.bills.find_one({"bill_id": bill_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(404, "Bill not found")
+    if b["creator_id"] != u["user_id"]:
+        raise HTTPException(403, "Only whoever created the bill can mark cash payments")
+    if body.user_id not in b["shares"]:
+        raise HTTPException(404, "That person isn't on this bill")
+    await settle_bill_share(bill_id, body.user_id, "cash")
+    return {"ok": True}
+
+
+@api.delete("/bills/{bill_id}")
+async def delete_bill(bill_id: str, u=Depends(current_user)):
+    b = await db.bills.find_one({"bill_id": bill_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(404, "Bill not found")
+    if b["creator_id"] != u["user_id"]:
+        raise HTTPException(403, "Only the creator can delete a bill")
+    if any(v.get("method") == "card" for v in b.get("paid", {}).values()):
+        raise HTTPException(400, "Someone already paid by card — this bill can't be deleted")
+    await db.bills.delete_one({"bill_id": bill_id})
+    await hub.broadcast(b["chat_id"], {"type": "bill"})
+    return {"ok": True}
+
+
+# ---------------- Host ID verification ----------------
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
+
+
+@api.post("/me/verify-host")
+async def submit_host_verification(id_document: UploadFile = File(...), selfie: UploadFile = File(...), u=Depends(current_user)):
+    hv = u.get("host_verification") or {}
+    if hv.get("status") == "approved":
+        raise HTTPException(400, "You're already a verified host")
+    if hv.get("status") == "pending":
+        raise HTTPException(400, "Your documents are already under review")
+    stored = {}
+    for label, f in (("id_document", id_document), ("selfie", selfie)):
+        ctype = (f.content_type or "").lower()
+        data = await f.read()
+        magic_ok = data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP") or data[4:8] == b"ftyp"
+        if ctype not in ("image/jpeg", "image/png", "image/webp", "image/heic") or not magic_ok:
+            raise HTTPException(400, f"{label.replace('_', ' ').title()} must be a clear photo (JPG/PNG)")
+        if len(data) > MAX_PHOTO_BYTES:
+            raise HTTPException(413, "Photos must be under 6MB")
+        path = f"{STORAGE_APP}/kyc/{u['user_id']}/{label}-{uuid.uuid4().hex}.jpg"
+        try:
+            resp = await run_in_threadpool(put_object, path, data, ctype)
+        except Exception as e:
+            logger.warning("kyc upload failed: %s", e)
+            raise HTTPException(502, "Secure upload unavailable, try again")
+        if resp.status_code >= 400:
+            raise HTTPException(502, "Secure upload failed, try again")
+        stored[label] = path  # private: never registered in db.files, never served publicly
+    upd = {"host_verification": {"status": "pending", "submitted_at": iso(now()), "docs": stored}}
+    await db.users.update_one({"user_id": u["user_id"]}, {"$set": upd})
+    u.update(upd)
+    return public_user(u, True)
+
+
+@api.get("/admin/host-verifications")
+async def admin_list_verifications(request: Request):
+    if not ADMIN_SECRET or request.headers.get("x-admin-secret") != ADMIN_SECRET:
+        raise HTTPException(403, "Forbidden")
+    docs = await db.users.find({"host_verification.status": "pending"}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "host_verification": 1}).to_list(200)
+    return docs
+
+
+class ReviewIn(BaseModel):
+    approve: bool
+    note: str = Field("", max_length=200)
+
+
+@api.post("/admin/host-verifications/{user_id}")
+async def admin_review_verification(user_id: str, body: ReviewIn, request: Request):
+    if not ADMIN_SECRET or request.headers.get("x-admin-secret") != ADMIN_SECRET:
+        raise HTTPException(403, "Forbidden")
+    status = "approved" if body.approve else "rejected"
+    res = await db.users.update_one({"user_id": user_id, "host_verification.status": "pending"},
+                                    {"$set": {"host_verification.status": status, "host_verification.reviewed_at": iso(now()), "host_verification.note": body.note}})
+    if not res.matched_count:
+        raise HTTPException(404, "No pending verification for that user")
+    await notify([user_id], {"title": "You're a verified host ✅" if body.approve else "Host verification needs another look",
+                             "message": "Guests now see the verified badge on your parties." if body.approve else (body.note or "Please resubmit clearer photos of your ID and a selfie."), "action_url": "/profile"})
+    return {"status": status}
+
+
 @api.post("/me/boost")
 async def boost(u=Depends(current_user)):
     if effective_tier(u) == "free":
@@ -1173,6 +1340,7 @@ class CheckoutIn(BaseModel):
     plan: Optional[Literal["premium", "super"]] = None
     pack: Optional[Literal["shot", "round", "bottle"]] = None
     party_id: Optional[str] = None  # pay the chip-in for a party you're attending
+    bill_id: Optional[str] = None   # settle your share of a split bill
     origin_url: str
 
 
@@ -1183,13 +1351,24 @@ def stripe_client(request: Request) -> StripeCheckout:
 
 @api.post("/payments/checkout")
 async def checkout(body: CheckoutIn, request: Request, u=Depends(current_user)):
-    if not body.plan and not body.pack and not body.party_id:
+    if not body.plan and not body.pack and not body.party_id and not body.bill_id:
         raise HTTPException(400, "Choose a plan, a credit pack or a party to pay for")
     origin = body.origin_url.rstrip("/")
     if not origin.startswith(("http://", "https://")):
         raise HTTPException(400, "Invalid origin")
     sc = stripe_client(request)
-    if body.party_id:
+    if body.bill_id:
+        b = await db.bills.find_one({"bill_id": body.bill_id}, {"_id": 0})
+        if not b:
+            raise HTTPException(404, "Bill not found")
+        if u["user_id"] not in b["shares"]:
+            raise HTTPException(403, "You're not part of this bill")
+        if u["user_id"] in b.get("paid", {}):
+            raise HTTPException(400, "You've already settled this one")
+        if b["creator_id"] == u["user_id"]:
+            raise HTTPException(400, "You created this bill — others pay you")
+        amount, kind, item, page = float(b["shares"][u["user_id"]]), "bill", body.bill_id, f"chat/{b['chat_id']}"
+    elif body.party_id:
         p = await db.parties.find_one({"party_id": body.party_id}, {"_id": 0})
         if not p:
             raise HTTPException(404, "Party not found")
@@ -1212,7 +1391,7 @@ async def checkout(body: CheckoutIn, request: Request, u=Depends(current_user)):
         metadata={"user_id": u["user_id"], "kind": kind, "item": item})
     s = await sc.create_checkout_session(req)
     await db.payment_transactions.insert_one({
-        "session_id": s.session_id, "user_id": u["user_id"], "kind": kind, "plan": body.plan, "pack": body.pack, "party_id": body.party_id, "amount": amount,
+        "session_id": s.session_id, "user_id": u["user_id"], "kind": kind, "plan": body.plan, "pack": body.pack, "party_id": body.party_id, "bill_id": body.bill_id, "amount": amount,
         "currency": "gbp", "payment_status": "initiated", "processed": False, "created_at": iso(now())})
     return {"url": s.url, "session_id": s.session_id}
 
@@ -1225,7 +1404,9 @@ async def grant_if_paid(session_id: str, payment_status: str):
     if payment_status == "paid":
         res = await db.payment_transactions.update_one({"session_id": session_id, "processed": False}, {"$set": {"processed": True}})
         if res.modified_count:
-            if tx.get("party_id"):
+            if tx.get("bill_id"):
+                await settle_bill_share(tx["bill_id"], tx["user_id"], "card")
+            elif tx.get("party_id"):
                 await settle_chipin(tx)
             elif tx.get("pack"):
                 await add_credits(tx["user_id"], CREDIT_PACKS[tx["pack"]]["credits"], "purchase", session_id)
@@ -1424,7 +1605,7 @@ async def startup():
 # ---------------- Security middleware ----------------
 # Sliding-window rate limit per client IP on sensitive routes (auth, uploads, payments).
 _hits: dict = defaultdict(deque)
-RATE_LIMITS = {"/api/auth/": (20, 60), "/api/me/photo": (10, 60), "/api/payments/": (30, 60), "/api/reports": (10, 60), "/api/me/verify-age": (10, 60)}
+RATE_LIMITS = {"/api/auth/": (20, 60), "/api/me/photo": (10, 60), "/api/payments/": (30, 60), "/api/reports": (10, 60), "/api/me/verify-age": (10, 60), "/api/me/verify-host": (5, 60), "/api/admin/": (30, 60)}
 
 
 @app.middleware("http")
