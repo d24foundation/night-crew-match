@@ -147,7 +147,7 @@ export default function Premium() {
         ) : (
           <Text style={s.muted}>In-app subscription options are unavailable right now. Please try again later.</Text>
         )}
-        <Btn testID="pay-with-card-button" title={`Pay ${PLANS.find((x) => x.key === plan)!.price} with card (monthly)`} icon="card" variant="ghost" loading={busy} onPress={payStripe} />
+        {Platform.OS !== "ios" && <Btn testID="pay-with-card-button" title={`Pay ${PLANS.find((x) => x.key === plan)!.price} with card (monthly)`} icon="card" variant="ghost" loading={busy} onPress={payStripe} />}
         <Pressable testID="restore-purchases-button" onPress={restore} style={{ alignItems: "center", padding: 8 }}>
           <Text style={s.link}>{sub.isRestoring ? "Restoring..." : "Restore purchases"}</Text>
         </Pressable>

@@ -24,6 +24,18 @@ export default function Profile() {
   const bottomChrome = usesNativeTabs ? insets.bottom : 0;
   const photo = usePhotoPicker(setUser);
   const [blocksOpen, setBlocksOpen] = useState(false);
+  const [del, setDel] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const toast = useToast();
+  const deleteAccount = async () => {
+    setDeleting(true);
+    try {
+      await api("/me", { method: "DELETE" });
+      setDel(false);
+      toast("Account deleted. Take care out there.");
+      await logout();
+    } catch (e) { toast((e as Error).message, "err"); } finally { setDeleting(false); }
+  };
   if (!user) return null;
 
   return (
@@ -92,6 +104,13 @@ export default function Profile() {
       </View>
 
       <Btn testID="logout-button" title="Log out" variant="ghost" icon="log-out-outline" onPress={logout} />
+      <Pressable testID="delete-account-button" onPress={() => setDel(true)} style={{ alignItems: "center", padding: 8 }}>
+        <Text style={{ color: colors.error, fontWeight: "700" }}>Delete my account</Text>
+      </Pressable>
+      <Sheet visible={del} onClose={() => setDel(false)} title="Delete your account?" sub="This removes your profile, photos, matches, chats and parties for good. Payment records are kept anonymised for accounting." testID="delete-sheet">
+        <Btn testID="delete-confirm-button" title="Yes, delete everything" icon="trash" variant="primary" loading={deleting} onPress={deleteAccount} />
+        <Btn title="Keep my account" variant="ghost" onPress={() => setDel(false)} />
+      </Sheet>
       {user.is_admin && <Btn testID="admin-button" title="Admin panel" variant="ghost" icon="construct-outline" onPress={() => router.push("/admin")} />}
       {photo.ui}
       <BlockedSheet visible={blocksOpen} onClose={() => setBlocksOpen(false)} />

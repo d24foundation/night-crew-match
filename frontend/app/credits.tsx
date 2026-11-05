@@ -101,7 +101,11 @@ export default function CreditsScreen() {
             </Pressable>
           ))}
         </View>
-        <Btn testID="buy-credits-button" title={selected ? `Buy ${selected.credits} credits for £${selected.price.toFixed(2)}` : "Buy credits"} icon="card" loading={busy} onPress={buy} />
+        {Platform.OS === "ios" ? (
+          <Text style={s.muted} testID="ios-credits-note">Credit packs can't be bought on iPhone yet — earn free credits below by inviting friends, or buy on the web.</Text>
+        ) : (
+          <Btn testID="buy-credits-button" title={selected ? `Buy ${selected.credits} credits for £${selected.price.toFixed(2)}` : "Buy credits"} icon="card" loading={busy} onPress={buy} />
+        )}
         <Text style={s.fine}>One-off payment via Stripe in GBP. Credits never expire.</Text>
 
         <Pressable testID="referral-card" onPress={shareReferral} style={s.refer}>

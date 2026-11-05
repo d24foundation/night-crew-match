@@ -289,7 +289,7 @@ async def current_user(request: Request) -> dict:
     u = await db.users.find_one({"user_id": payload["sub"]}, {"_id": 0})
     if not u:
         raise HTTPException(401, "User not found")
-    if u.get("suspended"):
+    if u.get("suspended") and not (request.method == "DELETE" and request.url.path.rstrip("/").endswith("/api/me")):
         raise HTTPException(403, "Your account is suspended. Contact support@afterparty.app")
     # In-app (RevenueCat) entitlement reported by the client SDK
     st = request.headers.get("X-Store-Tier")
@@ -541,6 +541,44 @@ async def verify_age(body: AgeIn, u=Depends(current_user)):
     await db.users.update_one({"user_id": u["user_id"]}, {"$set": upd})
     u.update(upd)
     return public_user(u, True)
+
+
+@api.delete("/me")
+async def delete_account(u=Depends(current_user)):
+    """App Store 5.1.1(v): in-app account deletion. Removes personal data; keeps anonymised payment records for accounting."""
+    uid = u["user_id"]
+    # Leave parties I'm attending; cancel parties I host that haven't started (guests get a heads-up)
+    await db.parties.update_many({"attendees.user_id": uid}, {"$pull": {"attendees": {"user_id": uid}}})
+    hosted = await db.parties.find({"host_id": uid, "starts_at": {"$gte": iso(now())}}, {"_id": 0, "party_id": 1, "title": 1, "attendees": 1}).to_list(200)
+    for p in hosted:
+        guests = [a["user_id"] for a in p["attendees"]]
+        if guests:
+            await notify(guests, {"title": f"{p['title']} was cancelled", "message": "The host closed their account. Check the feed for other afters tonight.", "action_url": "/"})
+    await db.parties.delete_many({"host_id": uid})
+    await db.matches.delete_many({"users": uid})
+    await db.swipes.delete_many({"$or": [{"user_id": uid}, {"target_id": uid}]})
+    await db.blocks.delete_many({"$or": [{"user_id": uid}, {"blocked_id": uid}]})
+    await db.nights.delete_many({"user_id": uid})
+    await db.ratings.delete_many({"user_id": uid})
+    await db.credit_ledger.delete_many({"user_id": uid})
+    await db.wallet_ledger.delete_many({"user_id": uid})
+    await db.payouts.update_many({"user_id": uid}, {"$set": {"user_id": "deleted"}})
+    await db.bills.delete_many({"creator_id": uid, "paid": {}})
+    await db.bills.update_many({f"shares.{uid}": {"$exists": True}}, {"$unset": {f"shares.{uid}": "", f"paid.{uid}": ""}})
+    hosted_ids = [p["party_id"] for p in await db.parties.find({"host_id": uid}, {"_id": 0, "party_id": 1}).to_list(500)]
+    if hosted_ids:
+        await db.messages.delete_many({"chat_id": {"$in": hosted_ids}})
+        await db.bills.delete_many({"chat_id": {"$in": hosted_ids}})
+    # Remove my stars from hosts' trust scores
+    async for r in db.ratings.find({"user_id": uid}, {"_id": 0}):
+        await db.users.update_one({"user_id": r["host_id"]}, {"$inc": {"rating_sum": -r["stars"], "rating_count": -1}})
+    await db.ratings.delete_many({"user_id": uid})
+    await db.messages.update_many({"sender_id": uid}, {"$set": {"sender_name": "Deleted user", "sender_picture": None, "text": "[message removed]"}})
+    await db.files.update_many({"owner_id": uid}, {"$set": {"public": False}})
+    await db.reports.update_many({"reporter_id": uid}, {"$set": {"reporter_id": "deleted"}})
+    await db.payment_transactions.update_many({"user_id": uid}, {"$set": {"user_id": "deleted"}})
+    await db.users.delete_one({"user_id": uid})
+    return {"deleted": True}
 
 
 # ---------------- Ratings ----------------
@@ -1635,7 +1673,9 @@ async def startup():
         logger.warning("object storage init failed: %s", e)
     pw = bcrypt.hashpw(b"demo1234", bcrypt.gensalt()).decode()
     ids = {}
-    for name, age, city, pic, vibes, bio, tier in DEMO:
+    # Demo users/parties + the known-password test account only seed when SEED_DEMO=true (preview). Off in production.
+    seed_demo = os.environ.get("SEED_DEMO", "true").lower() == "true"
+    for name, age, city, pic, vibes, bio, tier in (DEMO if seed_demo else []):
         email = f"{name.lower()}@demo.afterparty.app"
         existing = await db.users.find_one({"email": email}, {"_id": 0})
         if existing:
@@ -1648,14 +1688,14 @@ async def startup():
                                    "tier": tier, "tier_expires": iso(now() + timedelta(days=3650)) if tier != "free" else None,
                                    "password_hash": pw, "is_demo": True, "created_at": iso(now())})
     test = await db.users.find_one({"email": "test@afterparty.app"})
-    if not test:
+    if not test and seed_demo:
         await db.users.insert_one({"user_id": new_id("user"), "email": "test@afterparty.app", "name": "Tester", "age": 25,
                                    "city": "London", "vibes": ["House"], "bio": "Here for the afters",
-                                   "password_hash": bcrypt.hashpw(b"Test1234!", bcrypt.gensalt()).decode(),
+                                   "password_hash": bcrypt.hashpw(os.environ.get("TEST_USER_PASSWORD", "Test1234!").encode(), bcrypt.gensalt()).decode(),
                                    "tier": "free", "created_at": iso(now())})
     # keep demo parties fresh (always upcoming tonight) and never full
     await db.parties.update_many({"host_id": {"$in": list(ids.values())}, "capacity": {"$lt": 60}}, {"$set": {"capacity": 60}})
-    for i, (host, title, city, area, vibe, house, drinks, chip, cap, hrs) in enumerate(DEMO_PARTIES):
+    for i, (host, title, city, area, vibe, house, drinks, chip, cap, hrs) in enumerate(DEMO_PARTIES if seed_demo else []):
         cap = max(cap, 60)
         existing = await db.parties.find_one({"title": title, "host_id": ids[host]})
         start = iso(now() + timedelta(hours=hrs))

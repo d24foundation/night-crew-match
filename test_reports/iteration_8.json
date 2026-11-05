@@ -1,0 +1,39 @@
+{
+  "summary": "Store-review fixes tested. Backend: new suite test_account_deletion_suspend.py 13/13 pass (DELETE /api/me full flow + admin suspend/unsuspend); regression backend_test.py 25 passed/3 skipped (conditional skips). Frontend (390x844 web): register via UI -> Profile -> delete-account-button -> delete-sheet -> delete-confirm-button -> toast 'Account deleted. Take care out there.' -> login screen; re-login with deleted email shows 'Invalid email or password'. /premium shows pay-with-card-button and /credits shows buy-credits-button on web (ios-credits-note absent). Demo users (8) and admin still present. Only minor code-review gaps found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/me", "issue": "db.bills (creator_id/shares with the user) and db.payouts are not deleted/anonymised; bills+messages for the deleted host's party chats are left orphaned. server.py:546-570"},
+      {"endpoint": "DELETE /api/me", "issue": "Deleting the user's ratings does not decrement hosts' rating_sum/rating_count, so host averages keep the deleted user's stars. Reports where target_id==user remain (admin list shows target=null)."},
+      {"endpoint": "DELETE /api/me", "issue": "Suspended users get 403 from current_user, so they cannot delete their own account in-app (App Store 5.1.1(v) expects deletion always available). Consider allowing DELETE /me for suspended users."},
+      {"endpoint": "POST /api/auth/login", "issue": "Login does not check 'suspended' — returns 200 + token, then every call 403s. Better UX to return 403 'suspended' at login."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Profile", "issues": ["delete-account-button touch target is 358x32 (<44pt height); add paddingVertical 12+"]},
+      {"screen": "Credits", "issues": ["Referral card shows 'Your code …' for demo user zara (seeded users lack referral_code) — pre-existing"]},
+      {"screen": "Premium", "issues": ["Spinner below plans stays visible on web (RevenueCat offerings loading) — pre-existing"]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_account_deletion_suspend.py", "/app/test_reports/pytest/pytest_iter8.xml"],
+  "action_items": [
+    "Optional: in DELETE /api/me also clean db.bills / db.payouts (or anonymise), adjust host rating aggregates, and allow suspended users to delete their account",
+    "Optional: return 403 'suspended' at /auth/login",
+    "Increase delete-account-button touch target to >=44pt"
+  ],
+  "critical_code_review_comments": [
+    "server.py is 1762 lines — should be split into routers (auth, parties, chats, admin, payments)",
+    "DELETE /me runs ~15 sequential writes without a transaction; partial failure leaves a half-deleted account (acceptable but note)"
+  ],
+  "updated_files": ["/app/backend/tests/test_account_deletion_suspend.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Fresh TEST_ users created and all deleted via DELETE /api/me at end. No demo/admin data touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "pytest.ini uses xdist (-n --dist loadscope); run the new suite with -n 0. Auth rate limit 20/min per IP — sleep 60s between suites. Profile tab testID tab-profile; login testIDs login-email-input/login-password-input/login-submit-button/toggle-auth-mode/register-name-input/register-dob-input.",
+  "rca_of_issue": ""
+}
